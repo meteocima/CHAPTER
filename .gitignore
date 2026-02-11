@@ -1,0 +1,90 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.virtualenv/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Large data files
+*.nc
+*.grib
+*.grib1
+*.grib2
+*.grb
+*.grb2
+*.zarr/
+*.hdf5
+*.h5
+
+# Project-specific exclusions
+anemoi_data/
+test/
+zarr_anemoi/
+emcwf_table_202602.csv
+list_var_d2.py
+plot_pressure_levels.ipynb
+read_output.py
+var_list.txt
+
+# Output directories
+output/
+*.log
+*.out
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.old
+
+# OS specific
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# pytest
+.pytest_cache/
+.tox/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Environment variables
+.env
+.env.local
+
+uv.lock

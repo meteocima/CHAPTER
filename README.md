@@ -1,0 +1,184 @@
+# CHAPTER Reanalysis Conversion Pipeline
+
+This pipeline converts the CHAPTER (Computational Hydrometeorology with Advanced Performance to Enhanced Realism) reanalysis output from WRF to ECMWF-compatible GRIB1 format and Anemoi-ready datasets.
+
+![CHAPTER domain map](chapter_domain.png)
+
+
+## Overview
+
+CHAPTER is a high-resolution (3 km) regional reanalysis over Europe and the Mediterranean basin using the WRF model, described in:
+
+> Bernini, L., Lagasio, M., Milelli, M., Oberto, E., Parodi, A., Hachinger, S., Kranzlmüller, D., & Tartaglione, N. (2024). **Convection-permitting dynamical downscaling of ERA5 for Europe and the Mediterranean basin**. *Quarterly Journal of the Royal Meteorological Society*. https://doi.org/10.1002/qj.5014
+
+This pipeline performs two main conversions:
+
+1. **WRF → GRIB1**: Convert CHAPTER WRF output to ECMWF-compatible GRIB1 format using [wrf-python](https://wrf-python.readthedocs.io/en/latest/) for vertical interpolation to pressure levels and derived variable calculations, then eccodes for GRIB1 encoding with proper variable mapping and unit conversions
+2. **WRF → Anemoi ZARR**: Convert to Anemoi machine learning framework format using the official [anemoi-datasets](https://anemoi.readthedocs.io/projects/datasets/en/latest/) package
+
+## CHAPTER Reanalysis Characteristics
+
+- **Domain**: Europe and Mediterranean basin
+- **Resolution**: 3 km horizontal, 50 vertical levels
+- **Projection**: Mercator (MAP_PROJ=3)
+- **Model**: WRF (Weather Research and Forecasting)
+- **Period**: Multi-year climatological reanalysis
+- **Grid**: 1353×1641 points (Mercator projection)
+
+## Files
+
+### Main Conversion Scripts
+- `convert_to_pressure_levels.py` - Converts CHAPTER WRF output to pressure levels in GRIB1 format
+- `wrf_era5_comparison.py` - WRF to ECMWF variable mapping and paramId definitions
+- `wrf_anemoi_recipe.yaml` - Anemoi dataset recipe configuration
+- `run_anemoi_pipeline.sh` - Anemoi pipeline automation script
+
+### Visualization
+- `plot_anemoi_zarr.ipynb` - Visualize Anemoi ZARR datasets
+- `plot_grib_output.ipynb` - Visualize and validate GRIB1 output files
+
+### Build Dependencies
+- `fortran/` - WRF-Python computational extensions (Fortran source)
+- `src/` - Python wrappers and C extensions for WRF diagnostics
+- `CMakeLists.txt` - Build configuration for wrf-python compilation via uv
+
+
+## Prerequisites
+
+### Python Environment
+
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Initialize and sync the environment:
+
+```bash
+uv sync
+```
+
+This installs all dependencies defined in `pyproject.toml`, including:
+- Core: numpy, netCDF4, pandas, xarray
+- WRF processing: wrf-python
+- GRIB encoding: eccodes, cfgrib
+- Visualization: matplotlib, cartopy
+- ML framework: anemoi-datasets
+
+### System Requirements
+- eccodes library for GRIB encoding
+- WRF output files from CHAPTER reanalysis
+
+## Usage
+
+### Workflow 1: CHAPTER → GRIB1 (ECMWF Format)
+
+Convert CHAPTER WRF output to ECMWF-compatible GRIB1 format with proper projection and variable mapping.
+
+```bash
+uv run convert_to_pressure_levels.py
+```
+
+**Input**: CHAPTER WRF native files
+- `wrfout_d02_2023-03-28_HH:00:00` (Mercator projection, model levels)
+
+**Output**: GRIB1 files with ECMWF paramIds
+- `output/ailam-an-cima-3km-2023-2023-1h-v1-YYYYMMDDHH.grib`
+
+**Features**:
+- Interpolation to 13 pressure levels (1000-50 hPa)
+- Mercator projection encoding with proper grid parameters
+- ECMWF paramId mapping (table 128)
+- Unit conversions (geopotential, radiation, precipitation)
+- Ocean masking for SST (land/sea distinction via LANDMASK)
+- Bitmap support for missing values
+- Derived variables: specific humidity, TCW, skin temperature, slope of orography
+
+**Key Variables**:
+- **3D (pressure levels)**: t, u, v, w, z, q, r, pv, cc
+- **2D surface**: 2t, 2d, sp, msl, sst, skt, 10u, 10v
+- **Static**: z (orography), lsm, sdor, slor
+
+**Input**: CHAPTER WRF native files
+- `wrfout_d02_2023-03-28_HH:00:00` (Mercator projection, model levels)
+
+**Output**: GRIB1 files with ECMWF paramIds
+- `output/ailam-an-cima-3km-2023-2023-1h-v1-YYYYMMDDHH.grib`
+
+**Features**:
+- Interpolation to 13 pressure levels (1000-50 hPa)
+- Mercator projection encoding with proper grid parameters
+- ECMWF paramId mapping (table 128)
+- Unit conversions (geopotential, radiation, precipitation)
+- Ocean masking for SST (land/sea distinction via LANDMASK)
+- Bitmap support for missing values
+- Derived variables: specific humidity, TCW, skin temperature, slope of orography
+
+**Key Variables**:
+- **3D (pressure levels)**: t, u, v, w, z, q, r, pv, cc
+- **2D surface**: 2t, 2d, sp, msl, sst, skt, 10u, 10v
+- **Static**: z (orography), lsm, sdor, slor
+
+### Workflow 2: CHAPTER → Anemoi ZARR (ML Framework)
+
+Convert CHAPTER WRF output to Anemoi machine learning framework format.
+
+
+```bash
+./run_anemoi_pipeline.sh
+```
+
+Or with custom arguments:
+
+```bash
+./run_anemoi_pipeline.sh wrf_anemoi_recipe.yaml output_dataset.zarr
+```
+
+This will:
+1. **Create the dataset** using `anemoi-datasets create`
+   - Reads Grib1 files following the wildcard pattern
+   - Combines multiple timesteps along time dimension
+   - Computes statistics automatically
+   - Writes optimized Zarr format
+   
+2. **Inspect the dataset** using `anemoi-datasets inspect`
+   - Shows dimensions, variables, statistics
+   - Validates CF-compliance
+   - Reports any issues
+
+
+## Variables Included (ECMWF parameter table 128)
+### Atmospheric 3D (pressure levels)
+- `t`, `theta`, `td` - Temperature variables
+- `r`, `q` - Moisture
+- `z`, `pv` - Dynamics
+- `u`, `v`, `w` - Wind components
+- `cc` - Cloud fraction
+
+### Surface 2D
+- `2t`, `2d` - 2m temperature and moisture
+- `10u`, `10v` - 10m wind
+- `sp`, `msl` - Pressure
+- `sst`, `skt` - Surface temperature
+- `tcw` - Total column water
+
+### Static Fields
+- `z` - Terrain height
+- `lsm`, `ci` - Surface type
+- `sdor`, `slor`,  - Orographic parameters
+
+<!-- ### Encoding Variables
+- `sin_latitude`, `cos_longitude`, `sin_longitude`
+- `sin_julian_day`, `cos_julian_day`
+- `sin_local_time`, `cos_local_time` -->
+
+
+## References
+
+### CHAPTER Reanalysis
+- Bernini, L., Lagasio, M., Milelli, M., Oberto, E., Parodi, A., Hachinger, S., Kranzlmüller, D., & Tartaglione, N. (2024). **Convection-permitting dynamical downscaling of ERA5 for Europe and the Mediterranean basin**. *Quarterly Journal of the Royal Meteorological Society*. https://doi.org/10.1002/qj.5014
+
+### Anemoi Framework
+- [Anemoi Datasets Documentation](https://anemoi.readthedocs.io/projects/datasets/)
+- [Creating Datasets Guide](https://anemoi.readthedocs.io/projects/datasets/en/latest/building/introduction.html)
+- [Recipe Examples](https://anemoi.readthedocs.io/projects/datasets/en/latest/howtos/create/)
+- [CLI Reference](https://anemoi.readthedocs.io/projects/datasets/en/latest/cli/introduction.html)
+
+### ECMWF GRIB
+- [ECMWF Parameter Database](https://codes.ecmwf.int/grib/param-db/)
+- [eccodes Documentation](https://confluence.ecmwf.int/display/ECC/ecCodes+Home)

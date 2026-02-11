@@ -1,0 +1,38 @@
+# Anemoi Dataset Recipe for WRF Model Output
+# Converts WRF pressure-level data to Anemoi-ready format
+
+# Dataset metadata
+name: ailam-an-cima-3km-2023-2023-1h-v1
+description: "WRF CHAPTER domain d02 interpolated to pressure levels"
+attribution: "CHAPTER Project - CIMA Foundation"
+licence: "Internal use"
+resolution: "3km"
+
+# Temporal configuration
+dates:
+  start: '2023-03-28T12:00:00'
+  end: '2023-03-28T15:00:00'
+  frequency: 1h  # Frequenza tra timesteps
+  missing:
+    - 2023-03-28T13:00:00
+    - 2023-03-28T14:00:00
+
+# Input data source
+input:
+  grib:
+    path: /home/lmonaco/CHAPTER/output/ailam-an-cima-3km-2023-2023-1h-v1-*.grib
+
+# Output configuration
+output:
+  # Chunking configuration (time only)
+  chunking:
+    dates: 1
+  
+  # Compression
+  compressor:
+    _class: numcodecs.Zstd
+    level: 3
+
+# Statistics computation
+statistics:
+  method: "default"  # Anemoi computes statistics automatically
