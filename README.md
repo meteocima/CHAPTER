@@ -33,6 +33,15 @@ This pipeline performs two main conversions:
 - `wrf_anemoi_recipe.yaml` - Anemoi dataset recipe configuration
 - `run_anemoi_pipeline.sh` - Anemoi pipeline automation script
 
+### HPC Pipeline (Leonardo ↔ SuperMUC)
+- `hpc/submit_pipeline.py` - Orchestrator: submits SLURM fetch+convert jobs per day over a date range
+- `hpc/fetch_day.sh` - SLURM job: rsync 24 hourly wrfout files from SuperMUC via SSH control socket
+- `hpc/convert_day.sh` - SLURM array job (0-23): convert each hour's wrfout to GRIB, delete wrfout on success
+- `hpc/orchestrator.sh` - SLURM wrapper for submit_pipeline.py in worker mode
+- `hpc/dates.py` - Date-to-run-folder mapping (target date → SuperMUC init folder with 6h spinoff)
+- `conf/pipeline.yaml` - Hydra configuration (date range, paths, SuperMUC settings, SLURM parameters)
+- `functions_supermuc.sh` - Shell helper functions for rsync transfers via SSH control socket
+
 ### Visualization
 - `plot_anemoi_zarr.ipynb` - Visualize Anemoi ZARR datasets
 - `plot_grib_output.ipynb` - Visualize and validate GRIB1 output files
@@ -57,6 +66,7 @@ This installs all dependencies defined in `pyproject.toml`, including:
 - Core: numpy, netCDF4, pandas, xarray
 - WRF processing: wrf-python
 - GRIB encoding: eccodes, cfgrib
+- HPC pipeline: hydra-core, omegaconf
 - Visualization: matplotlib, cartopy
 - ML framework: anemoi-datasets
 
@@ -73,26 +83,6 @@ Convert CHAPTER WRF output to ECMWF-compatible GRIB1 format with proper projecti
 ```bash
 uv run convert_to_pressure_levels.py
 ```
-
-**Input**: CHAPTER WRF native files
-- `wrfout_d02_2023-03-28_HH:00:00` (Mercator projection, model levels)
-
-**Output**: GRIB1 files with ECMWF paramIds
-- `output/ailam-an-cima-3km-2023-2023-1h-v1-YYYYMMDDHH.grib`
-
-**Features**:
-- Interpolation to 13 pressure levels (1000-50 hPa)
-- Mercator projection encoding with proper grid parameters
-- ECMWF paramId mapping (table 128)
-- Unit conversions (geopotential, radiation, precipitation)
-- Ocean masking for SST (land/sea distinction via LANDMASK)
-- Bitmap support for missing values
-- Derived variables: specific humidity, TCW, skin temperature, slope of orography
-
-**Key Variables**:
-- **3D (pressure levels)**: t, u, v, w, z, q, r, pv, cc
-- **2D surface**: 2t, 2d, sp, msl, sst, skt, 10u, 10v
-- **Static**: z (orography), lsm, sdor, slor
 
 **Input**: CHAPTER WRF native files
 - `wrfout_d02_2023-03-28_HH:00:00` (Mercator projection, model levels)
@@ -141,6 +131,35 @@ This will:
    - Validates CF-compliance
    - Reports any issues
 
+### Workflow 3: HPC Pipeline (Leonardo ↔ SuperMUC)
+
+Batch-process date ranges on Leonardo by fetching wrfout files from SuperMUC and converting them to GRIB1 via SLURM jobs.
+
+**Prerequisites**: SSH control socket must be pre-activated in a tmux session:
+```bash
+ssh -fNM -S /tmp/skt-di54coy supermuc
+```
+
+**Submit the pipeline:**
+```bash
+python hpc/submit_pipeline.py                                            # uses conf/pipeline.yaml defaults
+python hpc/submit_pipeline.py dates.start=2023-03-01 dates.end=2023-03-31  # Hydra CLI overrides
+python hpc/submit_pipeline.py slurm.account=my_project                   # specify SLURM account
+python hpc/submit_pipeline.py --worker                                   # run submission loop directly (no SLURM self-submit)
+```
+
+**Pipeline flow** (per day):
+1. **Fetch** (lrd_all_serial): rsync 24 hourly wrfout files from SuperMUC
+2. **Convert** (array job 0-23, depends on fetch): convert each hour to GRIB1, delete wrfout on success
+
+The pipeline is **re-entrant**: dates with all 24 GRIBs present are skipped, and individual convert tasks skip if the output already exists.
+
+**Configuration** (`conf/pipeline.yaml`): date range, Leonardo paths, SuperMUC remote settings, SLURM partitions/walltimes, GRIB filename template. All values can be overridden via Hydra CLI.
+
+**Monitor:**
+```bash
+squeue -u $USER
+```
 
 ## Variables Included (ECMWF parameter table 128)
 ### Atmospheric 3D (pressure levels)

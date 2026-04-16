@@ -1,0 +1,37 @@
+# CHAPTER Pipeline Configuration
+# Override any value from CLI: python hpc/submit_pipeline.py dates.start=2023-03-01
+
+# Date range to process
+dates:
+  start: "2023-02-01"
+  end: "2023-02-28"
+
+# Paths on Leonardo
+paths:
+  work_dir: ${oc.env:WORK}/chapter
+  wrfout_dir: ${paths.work_dir}/wrfout
+  grib_dir: ${paths.work_dir}/grib
+  log_dir: ${paths.work_dir}/logs
+  project_dir: .  # path to CHAPTER repo on Leonardo
+
+# SuperMUC remote configuration
+supermuc:
+  host: supermuc
+  ssh_socket: /tmp/skt-di54coy
+  base_2023: /dss/dsafs01/0001/pn29co-dss-0000/CHAPTER-23-25
+  base_pre2023: /dss/dsafs01/0001/pn29co-dss-0000/CHAPTER
+  init_hour: 18
+
+# SLURM settings
+slurm:
+  account: ""  # project account, leave empty if not needed
+  fetch_partition: lrd_all_serial
+  fetch_walltime: "02:00:00"
+  convert_partition: lrd_all_serial
+  convert_walltime: "01:00:00"
+  convert_mem: "4G"
+  orchestrator_walltime: "04:00:00"
+
+# GRIB output naming (Anemoi convention)
+grib:
+  name_template: "ailam-an-cima-3km-{year}-{year}-1h-v1-{date_compact}{hour:02d}.grib"
