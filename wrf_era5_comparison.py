@@ -35,7 +35,7 @@ CORRECTIONS from previous version:
 
 WRF_TO_ECMWF_PARAMID = {
     'CLDFRA': {'shortName': 'cc', 'paramId': 248, 'long_name': 'Cloud Fraction', 'units': 'fraction'},
-    'GLW': {'shortName': 'strd', 'paramId': 175, 'long_name': 'Surface Thermal Radiation Downwards', 'units': 'J/m^2'},
+    'ACLWDNB': {'shortName': 'strd', 'paramId': 175, 'long_name': 'Surface Thermal Radiation Downwards (accumulated)', 'units': 'J/m^2'},
     #'HFX': {'shortName': 'sshf', 'paramId': 146, 'long_name': 'Time-Integrated Surface Sensible Heat Net Flux', 'units': 'J/m^2'},
     'HGT': {'shortName': 'z', 'paramId': 129, 'long_name': 'Geopotential', 'units': 'm^2/s^2'},
     'ISLTYP': {'shortName': 'slt', 'paramId': 43, 'long_name': 'Dominant Soil Category', 'units': 'category'},
@@ -57,7 +57,7 @@ WRF_TO_ECMWF_PARAMID = {
     #'SNOW': {'shortName': 'sf', 'paramId': 228144, 'long_name': 'Snow Water Equivalent', 'units': 'kg/m^2'},
     #'SNOWH': {'shortName': 'sd', 'paramId': 228141, 'long_name': 'Physical Snow Depth', 'units': 'm'},
     'SST': {'shortName': 'sst', 'paramId': 34, 'long_name': 'Sea Surface Temperature', 'units': 'K'},
-    'SWDOWN': {'shortName': 'ssrd', 'paramId': 169, 'long_name': 'Surface Solar Radiation Downwards', 'units': 'J/m^2'},
+    'ACSWDNB': {'shortName': 'ssrd', 'paramId': 169, 'long_name': 'Surface Solar Radiation Downwards (accumulated)', 'units': 'J/m^2'},
     #'T': {'shortName': 't', 'paramId': 500014, 'long_name': 'Temperature', 'units': 'K'},
     'T2': {'shortName': '2t', 'paramId': 167, 'long_name': '2m Temperature', 'units': 'K'},
     #'TSLB': {'shortName': 'stl1', 'paramId': 139, 'long_name': 'Soil Temperature Level 1', 'units': 'K'},
@@ -68,7 +68,7 @@ WRF_TO_ECMWF_PARAMID = {
     'V10': {'shortName': '10v', 'paramId': 166, 'long_name': '10m V-Component of Wind', 'units': 'm/s'},
     #'VAR': {'shortName': 'sdor', 'paramId': 160, 'long_name': 'Variance of Orography', 'units': 'm^2'},
     'VAR_SSO': {'shortName': 'sdor', 'paramId': 160, 'long_name': 'Standard Deviation of Subgrid-Scale Orography', 'units': 'm'},
-    'W': {'shortName': 'w', 'paramId': 135, 'long_name': 'Vertical Velocity', 'units': 'Pa/s'},
+    'W': {'shortName': 'w', 'paramId': 40, 'long_name': 'Vertical Velocity', 'units': 'm/s'},
     'pvo': {'shortName': 'pv', 'paramId': 60, 'long_name': 'Potential Vorticity', 'units': 'PVU'},
     'rh': {'shortName': 'r', 'paramId': 157, 'long_name': 'Relative Humidity', 'units': '%'},
     'skt': {'shortName': 'skt', 'paramId': 235, 'long_name': 'Skin Temperature (from longwave radiation)', 'units': 'K'},
@@ -79,7 +79,7 @@ WRF_TO_ECMWF_PARAMID = {
     'tk': {'shortName': 't', 'paramId': 130, 'long_name': 'Temperature', 'units': 'K'},
     'z': {'shortName': 'z', 'paramId': 129, 'long_name': 'Geopotential', 'units': 'm^2/s^2'},
     'tcw': {'shortName': 'tcw', 'paramId': 136, 'long_name': 'Total column water', 'units': 'kg/m^2'},
-    'slor': {'shortName': 'slor', 'paramId': 163, 'long_name': 'Slope of sub-gridscale orography', 'units': 'K'},
+    'slor': {'shortName': 'slor', 'paramId': 163, 'long_name': 'Slope of sub-gridscale orography', 'units': 'Numeric'},
 
 }
 

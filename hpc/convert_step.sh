@@ -1,25 +1,25 @@
 #!/bin/bash
-#SBATCH --array=0-23
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
 #SBATCH --time=01:00:00
-#SBATCH --job-name=chapter_conv
+#SBATCH --job-name=chapter_conv_step
 #
-# Convert a single hourly wrfout to GRIB1 format.
-# SLURM_ARRAY_TASK_ID (0-23) maps to the hour.
+# Convert a single hourly wrfout to GRIB1 format (single timestep, non-array).
+# Submitted by hpc/fetch_step.sh once the wrfout for the timestep has been fetched.
+# Runs on a compute node (e.g. dcgp_usr_prod); no network access required.
 #
 # Required env vars (set via --export at submission):
 #   TARGET_DATE   - target date in YYYY-MM-DD format
-#   WRFOUT_DIR    - directory containing wrfout files for this date
+#   HOUR          - hour of the timestep, zero-padded (00-23)
+#   WRFOUT_DIR    - directory containing the wrfout file for this timestep
 #   GRIB_DIR      - output directory for GRIB files
 #   PROJECT_DIR   - path to CHAPTER repo (for convert_to_pressure_levels.py)
 #   GRIB_TEMPLATE - output filename template (Python .format() style)
 
 set -euo pipefail
 
-HOUR=$(printf "%02d" "${SLURM_ARRAY_TASK_ID}")
+HOUR=$(printf "%02d" "$((10#${HOUR}))")
 DATE_COMPACT=$(echo "${TARGET_DATE}" | tr -d '-')
 
 INPUT="${WRFOUT_DIR}/wrfout_d02_${TARGET_DATE}_${HOUR}:00:00"
@@ -33,7 +33,7 @@ TMPOUT="${OUTPUT}.tmp"
 # Clean up partial output on failure
 trap 'rm -f "${TMPOUT}"' EXIT
 
-echo "=== CHAPTER convert_day ==="
+echo "=== CHAPTER convert_step ==="
 echo "Date:   ${TARGET_DATE}"
 echo "Hour:   ${HOUR}"
 echo "Input:  ${INPUT}"

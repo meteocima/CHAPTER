@@ -40,8 +40,15 @@ def submit_sbatch(args: list[str]) -> str:
     """Submit a SLURM job and return the job ID."""
     result = subprocess.run(
         ["sbatch"] + args,
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"sbatch failed (exit {result.returncode})\n"
+            f"  args: {args}\n"
+            f"  stdout: {result.stdout}\n"
+            f"  stderr: {result.stderr}"
+        )
     return parse_sbatch_jobid(result.stdout)
 
 
@@ -116,7 +123,6 @@ def run_worker(cfg: DictConfig):
             f"TARGET_DATE={date_str},"
             f"REMOTE_PATH={remote_path},"
             f"LOCAL_DIR={local_wrfout_dir},"
-            f"SSH_SOCKET={cfg.supermuc.ssh_socket},"
             f"SUPERMUC_HOST={cfg.supermuc.host}"
         )
         fetch_args = [
@@ -198,12 +204,18 @@ def run_entry(cfg: DictConfig):
     print(f"Log: {log_dir}/orchestrator_{orch_id}.out")
 
 
+# Detect --worker before Hydra parses sys.argv (it would reject the flag)
+WORKER_MODE = "--worker" in sys.argv
+if WORKER_MODE:
+    sys.argv.remove("--worker")
+
+
 @hydra.main(config_path="../conf", config_name="pipeline", version_base=None)
 def app(cfg: DictConfig):
     # Resolve all interpolations
     OmegaConf.resolve(cfg)
 
-    if "--worker" in sys.argv:
+    if WORKER_MODE:
         run_worker(cfg)
     else:
         run_entry(cfg)

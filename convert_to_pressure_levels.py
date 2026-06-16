@@ -24,10 +24,6 @@ from wrf_era5_comparison import WRF_TO_ECMWF_PARAMID
 # Desired pressure levels (hPa)
 PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50]
 
-# WRF output interval (seconds) for radiation conversion W/m² -> J/m²
-# Typically: 3600 for hourly output, 10800 for 3-hourly output
-OUTPUT_INTERVAL_SECONDS = 3600  # 1 hour
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -188,14 +184,15 @@ def main(input_file, output_file, debug_vars=None):
                 elif var_name == 'VAR_SSO':
                     output_vars[var_name] = np.sqrt(var_data.values)
                     print(f"  {var_name} (2D, converted to standard deviation: {np.sqrt(var_data.values).min():.2f}-{np.sqrt(var_data.values).max():.2f} m)")
+                # Special conversion: Q2 (mixing ratio) -> specific humidity: q = w/(1+w)
+                elif var_name == 'Q2':
+                    q2_mr = var_data.values
+                    output_vars[var_name] = q2_mr / (1.0 + q2_mr)
+                    print(f"  {var_name} (2D, mixing ratio -> specific humidity)")
                 # Special conversion: RAINNC, RAINC (mm) -> tp (m)
                 elif var_name in ['RAINNC', 'RAINC']:
                     output_vars[var_name] = var_data.values / 1000.0  # mm -> m
                     print(f"  {var_name} (2D, converted to m: {var_data.values.min()/1000.0:.6f}-{var_data.values.max()/1000.0:.6f} m)")
-                # Special conversion: SWDOWN, GLW (W/m²) -> ssrd, strd (J/m²)
-                elif var_name in ['SWDOWN', 'GLW']:
-                    output_vars[var_name] = var_data.values * OUTPUT_INTERVAL_SECONDS  # W/m² -> J/m²
-                    print(f"  {var_name} (2D, converted to J/m²: {var_data.values.min()*OUTPUT_INTERVAL_SECONDS:.1f}-{var_data.values.max()*OUTPUT_INTERVAL_SECONDS:.1f} J/m²)")
                 else:
                     output_vars[var_name] = var_data.values
                     print(f"  {var_name} (2D, shape: {var_data.shape})")
@@ -289,11 +286,17 @@ def main(input_file, output_file, debug_vars=None):
         except Exception as e:
             print(f"  SST: {str(e)}")
 
+    # Cache QVAPOR for reuse in specific humidity and TCW calculations
+    _qvapor_cache = None
+    if ('q' in WRF_TO_ECMWF_PARAMID or 'tcw' in WRF_TO_ECMWF_PARAMID):
+        if not debug_vars or any(v in debug_vars for v in ['q', 'tcw']):
+            _qvapor_cache = wrf.getvar(ncfile, "QVAPOR", timeidx=0)
+
     # Specific humidity from QVAPOR (interpolated)
     if 'q' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'q' in debug_vars):
         print("Calculating specific_humidity from QVAPOR...")
         try:
-            qvapor = wrf.getvar(ncfile, "QVAPOR", timeidx=0)
+            qvapor = _qvapor_cache
             qvapor_interp = wrf.vinterp(ncfile,
                                         field=qvapor,
                                         vert_coord="pressure",
@@ -312,7 +315,7 @@ def main(input_file, output_file, debug_vars=None):
         print("Calculating TCW (Total Column Water)...")
         try:
             # Read all water components (kg/kg mixing ratio)
-            qvapor = wrf.getvar(ncfile, "QVAPOR", timeidx=0)
+            qvapor = _qvapor_cache
             qcloud = wrf.getvar(ncfile, "QCLOUD", timeidx=0)
             qrain = wrf.getvar(ncfile, "QRAIN", timeidx=0)
             qice = wrf.getvar(ncfile, "QICE", timeidx=0)
@@ -328,8 +331,8 @@ def main(input_file, output_file, debug_vars=None):
             # Vertical integration: TCW = integral q_total * (dp/g)
             g = 9.81  # m/s^2
             # Calculate dp between levels (in Pa)
-            dp = np.diff(pressure.values * 100, axis=0)  # hPa -> Pa
-            dp = np.concatenate([dp, dp[-1:, :, :]], axis=0)  # Add dummy layer at top
+            dp = np.abs(np.diff(pressure.values * 100, axis=0))  # hPa -> Pa, absolute
+            dp = np.concatenate([dp, np.zeros_like(dp[-1:, :, :])], axis=0)  # Zero padding at top
 
             # TCW = integral q * (dp/g) [kg/m^2]
             tcw = np.sum(q_total.values * dp / g, axis=0)
@@ -504,6 +507,14 @@ def main(input_file, output_file, debug_vars=None):
                 elif var_name in ['U10', 'V10']:
                     codes_set(gid, 'indicatorOfTypeOfLevel', 105)  # height above ground
                     codes_set(gid, 'level', 10)  # 10 meters
+                # Mean sea level pressure
+                elif var_name == 'slp':
+                    codes_set(gid, 'indicatorOfTypeOfLevel', 102)  # mean sea level
+                    codes_set(gid, 'level', 0)
+                # Total column water (entire atmosphere)
+                elif var_name == 'tcw':
+                    codes_set(gid, 'indicatorOfTypeOfLevel', 200)  # entire atmosphere
+                    codes_set(gid, 'level', 0)
                 # Other variables: surface
                 else:
                     codes_set(gid, 'indicatorOfTypeOfLevel', 1)  # surface

@@ -161,6 +161,41 @@ The pipeline is **re-entrant**: dates with all 24 GRIBs present are skipped, and
 squeue -u $USER
 ```
 
+### Workflow 4: Step-by-step Pipeline via Datamover (Leonardo ↔ chapteradmin VM)
+
+Process an **hourly time window** by fetching wrfout files through the **CINECA datamover**
+(`data.leonardo.cineca.it`), which has outbound connectivity that compute nodes lack. The fetch
+runs on `lrd_all_serial`; the GRIB conversion runs on a compute node (`dcgp_usr_prod`).
+
+```bash
+python hpc/submit_step_pipeline.py \
+    window.start_date=2023-05-23 window.start_hour=0 \
+    window.end_date=2023-05-25  window.end_hour=23
+# convert jobs charge slurm.step_convert_account (default aifpt_ailamit_0, the DCGP association)
+```
+
+Preview everything (fetch/convert/recursion commands) **without** SLURM or network — useful while
+LRZ is unavailable:
+```bash
+python hpc/submit_step_pipeline.py window.start_date=2023-05-23 window.start_hour=0 \
+    window.end_date=2023-05-24 window.end_hour=23 dry_run=true
+```
+
+**Flow** (`hpc/submit_step_pipeline.py` → `hpc/fetch_step.sh` → `hpc/convert_step.sh`):
+1. The launcher submits one **recursive driver** (`fetch_step.sh`) on `lrd_all_serial`.
+2. The driver handles a **batch** of `batch.size` hourly timesteps. For each:
+   - skips it if the output GRIB already exists (re-entrant);
+   - fetches the wrfout via `ssh -xT data.leonardo.cineca.it "scp -F <cfg> supermuc-vm:<remote> <local>/"`
+     (up to `batch.fetch_parallel` transfers in flight);
+   - submits a single-timestep **convert** job on `dcgp_usr_prod` (independent, runs in parallel).
+3. After the batch, the driver **resubmits itself** for the next timestep until `window.end_*`.
+
+Init-folder mapping reuses the previous-day/18Z convention (`hpc/dates.py`), e.g. target
+`2023-05-23 00Z` → `…/CHAPTER-23-25/2023052218/wrfout_d02_2023-05-23_00:00:00`. The datamover/VM
+paths (`datamover.*`) are configured separately from the rsync/DSS paths (`supermuc.*`).
+The driver on `lrd_all_serial` needs no account; convert jobs on `dcgp_usr_prod` charge
+`slurm.step_convert_account` (default `aifpt_ailamit_0`).
+
 ## Variables Included (ECMWF parameter table 128)
 ### Atmospheric 3D (pressure levels)
 - `t`, `theta`, `td` - Temperature variables

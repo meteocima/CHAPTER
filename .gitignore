@@ -31,6 +31,7 @@ env/
 
 # Large data files
 *.nc
+wrfout_d02_*
 *.grib
 *.grib1
 *.grib2
@@ -41,6 +42,7 @@ env/
 *.h5
 
 # Project-specific exclusions
+outputs/          # Hydra run directories
 anemoi_data/
 test/
 zarr_anemoi/

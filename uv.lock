@@ -464,7 +464,7 @@ dependencies = [
 requires-dist = [
     { name = "anemoi-datasets", specifier = ">=0.5.28" },
     { name = "cartopy", specifier = ">=0.25.0" },
-    { name = "eccodes", specifier = ">=2.45.0" },
+    { name = "eccodes", specifier = ">=2.34.0" },
     { name = "eckitlib", specifier = ">=1.32.4.9" },
     { name = "ecmwf-api-client", specifier = ">=1.6.5" },
     { name = "fckitlib", specifier = ">=0.14.1.9" },

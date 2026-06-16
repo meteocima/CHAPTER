@@ -1,36 +1,72 @@
 # CHAPTER Pipeline Configuration
 # Override any value from CLI: python hpc/submit_pipeline.py dates.start=2023-03-01
 
-# Date range to process
+# Preview mode for the step-by-step pipeline: print fetch/convert/recursion
+# commands locally without submitting to SLURM or touching the network.
+dry_run: false
+
+# Date range to process (day-based pipeline: submit_pipeline.py)
 dates:
   start: "2023-02-01"
   end: "2023-02-28"
 
+# Time window for the step-by-step pipeline (submit_step_pipeline.py).
+# Hourly timesteps from start_date/start_hour to end_date/end_hour inclusive.
+window:
+  start_date: "2023-05-23"
+  start_hour: 0
+  end_date: "2023-05-23"
+  end_hour: 23
+
 # Paths on Leonardo
 paths:
-  work_dir: ${oc.env:WORK}/chapter
+  work_dir: /leonardo_work/AIFPT_AILAMIT/CHAPTER
   wrfout_dir: ${paths.work_dir}/wrfout
   grib_dir: ${paths.work_dir}/grib
   log_dir: ${paths.work_dir}/logs
   project_dir: .  # path to CHAPTER repo on Leonardo
 
-# SuperMUC remote configuration
+# SuperMUC remote configuration (day-based pipeline: rsync via SSH ControlMaster)
 supermuc:
   host: supermuc
-  ssh_socket: /tmp/skt-di54coy
   base_2023: /dss/dsafs01/0001/pn29co-dss-0000/CHAPTER-23-25
   base_pre2023: /dss/dsafs01/0001/pn29co-dss-0000/CHAPTER
   init_hour: 18
 
+# Datamover-based fetch (step-by-step pipeline). The fetch job runs on lrd_all_serial
+# and triggers an scp on the CINECA datamover, which reaches the chapteradmin VM.
+# NB: these are the VM-view paths, different from supermuc.* (DSS view).
+datamover:
+  host: data.leonardo.cineca.it
+  ssh_config: /leonardo/home/userexternal/lmonaco0/.ssh/config
+  remote_host: supermuc-vm
+  base_2023: /home/chapteradmin/mnt/CHAPTER-23-25
+  base_pre2023: /home/chapteradmin/mnt/CHAPTER  # assumption: confirm if pre-2023 data is needed
+  init_hour: 18
+
+# Batch / parallelism for the step-by-step pipeline
+batch:
+  size: 24           # timesteps handled per driver iteration before it resubmits itself
+  fetch_parallel: 4  # concurrent scp transfers through the datamover within a batch
+
 # SLURM settings
 slurm:
-  account: ""  # project account, leave empty if not needed
+  account: ""  # project account, leave empty if not needed (REQUIRED for dcgp_usr_prod)
   fetch_partition: lrd_all_serial
   fetch_walltime: "02:00:00"
   convert_partition: lrd_all_serial
   convert_walltime: "01:00:00"
-  convert_mem: "4G"
+  convert_mem: "20G"
   orchestrator_walltime: "04:00:00"
+  # step-by-step pipeline (submit_step_pipeline.py)
+  # driver runs on lrd_all_serial (AllowAccounts=ALL, no budget) -> uses slurm.account (may be empty)
+  driver_partition: lrd_all_serial
+  driver_walltime: "04:00:00"
+  # convert runs on dcgp_usr_prod -> needs the DCGP-budget association
+  step_convert_partition: dcgp_usr_prod
+  step_convert_walltime: "01:00:00"
+  step_convert_mem: "20G"
+  step_convert_account: aifpt_ailamit_0  # project AILAMIT, DCGP association
 
 # GRIB output naming (Anemoi convention)
 grib:

@@ -41,6 +41,14 @@ python hpc/submit_pipeline.py slurm.account=my_project                # Hydra CL
 python hpc/submit_pipeline.py --worker                                # run submission loop directly (skip SLURM self-submit)
 ```
 
+**Step-by-step HPC pipeline (datamover fetch, hourly window):**
+```bash
+# Fetch via CINECA datamover (data.leonardo.cineca.it -> chapteradmin VM), convert on dcgp_usr_prod.
+python hpc/submit_step_pipeline.py window.start_date=2023-05-23 window.start_hour=0 \
+    window.end_date=2023-05-25 window.end_hour=23   # convert charges slurm.step_convert_account (default aifpt_ailamit_0)
+python hpc/submit_step_pipeline.py ... dry_run=true                   # local preview, no SLURM/network
+```
+
 **SuperMUC file transfer helpers (source in shell):**
 ```bash
 source functions_supermuc.sh
@@ -85,7 +93,10 @@ No CI/CD pipeline is configured. No linter configuration exists.
   - `fetch_day.sh` - SLURM job: rsync 24 hourly wrfout files from SuperMUC via SSH control socket
   - `convert_day.sh` - SLURM array job (0-23): convert each hour's wrfout to GRIB, delete wrfout on success. Re-entrant (skips existing outputs)
   - `orchestrator.sh` - SLURM wrapper for submit_pipeline.py in worker mode
-  - `dates.py` - Date-to-run-folder mapping (target date -> SuperMUC init folder with 6h spinoff). Handles different base paths for pre-2023 vs 2023+ data
+  - `submit_step_pipeline.py` - Launcher for the step-by-step (hourly window) pipeline. Submits one recursive driver job; supports `dry_run=true` for a no-SLURM/no-network preview
+  - `fetch_step.sh` - Recursive driver (lrd_all_serial). Fetches each timestep via the CINECA datamover (`ssh -xT data.leonardo.cineca.it "scp -F <cfg> supermuc-vm:<remote> <local>/"`), submits a convert job per timestep, then resubmits itself for the next batch until the window end. Re-entrant (skips timesteps whose GRIB exists)
+  - `convert_step.sh` - Single-timestep convert job (dcgp_usr_prod), non-array variant of `convert_day.sh`
+  - `dates.py` - Date-to-run-folder mapping (target date -> SuperMUC init folder with 6h spinoff). Handles different base paths for pre-2023 vs 2023+ data. Reused by both pipelines
 - **`functions_supermuc.sh`** - Shell helper functions (`supermuc-put`, `supermuc-get`) for rsync transfers via SSH control socket
 
 ### Data Flow
@@ -95,6 +106,8 @@ WRF NetCDF (`wrfout_d02_*`) -> wrf-python diagnostics + pressure interpolation -
 ### HPC Pipeline Flow (Leonardo ↔ SuperMUC)
 
 Per day: orchestrator submits fetch job (lrd_all_serial, rsync 24 wrfout) -> convert array job (0-23, each hour independently, depends on fetch via `afterok`) -> delete wrfout on success. Config via Hydra (`conf/pipeline.yaml`) with CLI overrides. SSH control socket must be pre-activated in tmux. Pipeline is re-entrant: skips dates where all 24 GRIBs already exist, and individual convert tasks skip if the output GRIB exists. SuperMUC has different base paths for pre-2023 vs 2023+ runs.
+
+**Step-by-step flow (datamover, hourly window):** an alternative to the day-based flow. `submit_step_pipeline.py` submits one recursive driver (`fetch_step.sh`) on `lrd_all_serial`. The driver processes a batch of hourly timesteps — fetching each via the CINECA datamover (compute nodes have no internet, so the fetch cannot run on a compute node) and submitting an independent convert job per timestep on `dcgp_usr_prod` — then resubmits itself for the next batch until `window.end_*`. The datamover/VM paths live under `datamover.*` in `conf/pipeline.yaml` (distinct from the rsync/DSS paths under `supermuc.*`); both share the init-folder mapping in `dates.py`. Use `dry_run=true` to preview all commands without SLURM or network.
 
 ### Important Domain Details
 
