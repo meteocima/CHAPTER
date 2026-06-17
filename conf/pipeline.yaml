@@ -4,6 +4,8 @@
 # Preview mode for the step-by-step pipeline: print fetch/convert/recursion
 # commands locally without submitting to SLURM or touching the network.
 dry_run: false
+# Read-only consolidated status report (no SLURM submission) for submit_step_pipeline.py.
+report: false
 
 # Date range to process (day-based pipeline: submit_pipeline.py)
 dates:
@@ -11,12 +13,22 @@ dates:
   end: "2023-02-28"
 
 # Time window for the step-by-step pipeline (submit_step_pipeline.py).
-# Hourly timesteps from start_date/start_hour to end_date/end_hour inclusive.
+# Hourly timesteps from start_date/start_hour (OLDEST) to end_date/end_hour (NEWEST), inclusive.
+# With direction=backward the run starts at the NEWEST end and walks back to the oldest.
 window:
-  start_date: "2023-05-23"
-  start_hour: 0
-  end_date: "2023-05-23"
+  start_date: "2025-06-30"
+  start_hour: 14
+  end_date: "2025-06-30"
   end_hour: 23
+
+# Step-by-step pipeline behaviour
+pipeline:
+  direction: backward  # backward = newest->oldest (default); forward = oldest->newest
+  # The fetch driver runs on a LOGIN NODE (the datamover is NOT reachable from
+  # lrd_all_serial / compute nodes). Login-node processes are killed past ~30 min,
+  # so the driver works to this wall-time budget then re-spawns itself (detached)
+  # for the next batch. Keep driver_max_seconds + datamover.fetch_timeout < ~1800.
+  driver_max_seconds: 1080  # ~18 min per driver process before it re-spawns
 
 # Paths on Leonardo
 paths:
@@ -24,6 +36,7 @@ paths:
   wrfout_dir: ${paths.work_dir}/wrfout
   grib_dir: ${paths.work_dir}/grib
   log_dir: ${paths.work_dir}/logs
+  status_log: ${paths.log_dir}/step_pipeline_status.log  # append-only step ledger (driver-written)
   project_dir: .  # path to CHAPTER repo on Leonardo
 
 # SuperMUC remote configuration (day-based pipeline: rsync via SSH ControlMaster)
@@ -33,9 +46,11 @@ supermuc:
   base_pre2023: /dss/dsafs01/0001/pn29co-dss-0000/CHAPTER
   init_hour: 18
 
-# Datamover-based fetch (step-by-step pipeline). The fetch job runs on lrd_all_serial
-# and triggers an scp on the CINECA datamover, which reaches the chapteradmin VM.
-# NB: these are the VM-view paths, different from supermuc.* (DSS view).
+# Datamover-based fetch (step-by-step pipeline). Run from a LOGIN NODE: the driver
+# triggers an scp on the CINECA datamover, which reaches the chapteradmin VM.
+# NB: data.leonardo.cineca.it is reachable from regular login nodes only, NOT from
+# lrd_all_serial (login08/13 are firewalled off). These are the VM-view paths,
+# different from supermuc.* (DSS view).
 datamover:
   host: data.leonardo.cineca.it
   ssh_config: /leonardo/home/userexternal/lmonaco0/.ssh/config
@@ -43,11 +58,13 @@ datamover:
   base_2023: /home/chapteradmin/mnt/CHAPTER-23-25
   base_pre2023: /home/chapteradmin/mnt/CHAPTER  # assumption: confirm if pre-2023 data is needed
   init_hour: 18
+  fetch_timeout: 600  # s: scp wrapped in `timeout`; cuts tape-recall hangs well within the login limit
+  fetch_retries: 2    # retry transient scp failures before logging the timestep as failed
 
 # Batch / parallelism for the step-by-step pipeline
 batch:
-  size: 24           # timesteps handled per driver iteration before it resubmits itself
-  fetch_parallel: 4  # concurrent scp transfers through the datamover within a batch
+  size: 24           # upper bound on timesteps per driver process (time budget usually cuts first)
+  fetch_parallel: 2  # concurrent scp through the datamover (keep low: shared login node + datamover)
 
 # SLURM settings
 slurm:
@@ -59,9 +76,7 @@ slurm:
   convert_mem: "20G"
   orchestrator_walltime: "04:00:00"
   # step-by-step pipeline (submit_step_pipeline.py)
-  # driver runs on lrd_all_serial (AllowAccounts=ALL, no budget) -> uses slurm.account (may be empty)
-  driver_partition: lrd_all_serial
-  driver_walltime: "04:00:00"
+  # NB: the fetch driver runs on a login node (NOT SLURM) -- see pipeline.driver_max_seconds.
   # convert runs on dcgp_usr_prod -> needs the DCGP-budget association
   step_convert_partition: dcgp_usr_prod
   step_convert_walltime: "01:00:00"

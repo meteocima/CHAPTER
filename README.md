@@ -164,34 +164,64 @@ squeue -u $USER
 ### Workflow 4: Step-by-step Pipeline via Datamover (Leonardo ↔ chapteradmin VM)
 
 Process an **hourly time window** by fetching wrfout files through the **CINECA datamover**
-(`data.leonardo.cineca.it`), which has outbound connectivity that compute nodes lack. The fetch
-runs on `lrd_all_serial`; the GRIB conversion runs on a compute node (`dcgp_usr_prod`).
+(`data.leonardo.cineca.it`). **Run it from a regular login node:** the datamover is reachable only
+from login nodes, **not** from `lrd_all_serial` or compute nodes. The fetch driver runs on the login
+node; the GRIB conversion runs as a SLURM job on `dcgp_usr_prod`.
 
 ```bash
+# Run from a login node (the launcher refuses to start where the datamover is unreachable):
 python hpc/submit_step_pipeline.py \
-    window.start_date=2023-05-23 window.start_hour=0 \
-    window.end_date=2023-05-25  window.end_hour=23
-# convert jobs charge slurm.step_convert_account (default aifpt_ailamit_0, the DCGP association)
+    window.start_date=2025-06-01 window.start_hour=0 \
+    window.end_date=2025-06-30  window.end_hour=23
+# By default direction=backward: the run starts at the NEWEST edge (2025-06-30 23Z)
+# and walks back to the oldest, so the most recent GRIBs are produced first.
+# convert jobs charge slurm.step_convert_account (default aifpt_ailamit_0, the DCGP association).
+# Stop the whole chain with:  pkill -f hpc/fetch_step.sh
 ```
 
-Preview everything (fetch/convert/recursion commands) **without** SLURM or network — useful while
-LRZ is unavailable:
+Preview everything (fetch/convert/respawn commands) **without** network — useful while LRZ is
+unavailable:
 ```bash
-python hpc/submit_step_pipeline.py window.start_date=2023-05-23 window.start_hour=0 \
-    window.end_date=2023-05-24 window.end_hour=23 dry_run=true
+python hpc/submit_step_pipeline.py window.start_date=2025-06-30 window.start_hour=14 \
+    window.end_date=2025-06-30 window.end_hour=23 batch.size=5 dry_run=true
 ```
 
 **Flow** (`hpc/submit_step_pipeline.py` → `hpc/fetch_step.sh` → `hpc/convert_step.sh`):
-1. The launcher submits one **recursive driver** (`fetch_step.sh`) on `lrd_all_serial`.
-2. The driver handles a **batch** of `batch.size` hourly timesteps. For each:
+1. The launcher TCP-probes the datamover, then launches the **driver detached on the login node**
+   (`fetch_step.sh`), starting at the newest edge (backward) or oldest edge (forward) per
+   `pipeline.direction`.
+2. The driver fetches timesteps until its wall-time budget (`pipeline.driver_max_seconds`, default
+   ~18 min — login-node processes are killed past ~30 min) or `batch.size`, whichever first. Per step:
    - skips it if the output GRIB already exists (re-entrant);
    - fetches the wrfout via `ssh -xT data.leonardo.cineca.it "scp -F <cfg> supermuc-vm:<remote> <local>/"`
-     (up to `batch.fetch_parallel` transfers in flight);
+     (wrapped in `timeout`, with `datamover.fetch_retries`; up to `batch.fetch_parallel` in flight);
+   - validates the file is a readable NetCDF (size + header open);
    - submits a single-timestep **convert** job on `dcgp_usr_prod` (independent, runs in parallel).
-3. After the batch, the driver **resubmits itself** for the next timestep until `window.end_*`.
+3. When the budget/batch is hit, the driver **re-spawns itself detached** (`setsid`) — a fresh process
+   with a fresh ~30-min clock — continuing until the window edge.
+
+**Status ledger & missing/tape handling.** Every timestep's outcome is appended to
+`paths.status_log` (`…/logs/step_pipeline_status.log`), e.g.:
+```
+2025-...Z | 2025-06-30T23 | FETCH_OK | size=...B
+2025-...Z | 2025-06-30T23 | CONVERT_SUBMITTED | job=...
+2025-...Z | 2025-06-30T20 | MISSING_ON_LRZ | scp: ...: No such file or directory
+2025-...Z | 2025-06-30T19 | TAPE_TIMEOUT | scp exceeded 600s; file likely migrated to tape -> ask LRZ to recall
+2025-...Z | 2025-06-30T18 | UNREADABLE_TAPE | size=...B not a readable NetCDF; likely tape stub/truncated
+```
+A missing or on-tape file is **logged and skipped, never fatal** — the chain keeps going. On LRZ,
+files may be migrated to tape: visible on the filesystem but not staged, so the wrfout is unreadable.
+These surface as `TAPE_TIMEOUT` / `UNREADABLE_TAPE` / `FETCH_ERROR`. Ask LRZ to recall them, then
+re-run the same window (re-entrant: only timesteps without a GRIB are re-fetched).
+
+Consolidated, read-only status report (DONE / GRIB_MISSING / RECALL, with the recall list):
+```bash
+python hpc/submit_step_pipeline.py window.start_date=2025-06-01 window.start_hour=0 \
+    window.end_date=2025-06-30 window.end_hour=23 report=true
+```
 
 Init-folder mapping reuses the previous-day/18Z convention (`hpc/dates.py`), e.g. target
-`2023-05-23 00Z` → `…/CHAPTER-23-25/2023052218/wrfout_d02_2023-05-23_00:00:00`. The datamover/VM
+`2025-06-30 00Z` → `…/CHAPTER-23-25/2025062918/wrfout_d02_2025-06-30_00:00:00`. The datamover/VM
 paths (`datamover.*`) are configured separately from the rsync/DSS paths (`supermuc.*`).
 The driver on `lrd_all_serial` needs no account; convert jobs on `dcgp_usr_prod` charge
 `slurm.step_convert_account` (default `aifpt_ailamit_0`).
