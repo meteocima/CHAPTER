@@ -23,11 +23,15 @@ HOUR=$(printf "%02d" "$((10#${HOUR}))")
 DATE_COMPACT=$(echo "${TARGET_DATE}" | tr -d '-')
 
 INPUT="${WRFOUT_DIR}/wrfout_d02_${TARGET_DATE}_${HOUR}:00:00"
-OUTPUT="${GRIB_DIR}/${GRIB_TEMPLATE}"
+
+# Output goes under a YYYY/MM tree below GRIB_DIR
+YEAR="${TARGET_DATE:0:4}"
+MONTH="${TARGET_DATE:5:2}"
+OUTPUT="${GRIB_DIR}/${YEAR}/${MONTH}/${GRIB_TEMPLATE}"
 
 # Expand template variables in output filename
-YEAR="${TARGET_DATE:0:4}"
 OUTPUT=$(echo "${OUTPUT}" | sed "s/{year}/${YEAR}/g; s/{date_compact}/${DATE_COMPACT}/g; s/{hour:02d}/${HOUR}/g")
+mkdir -p "$(dirname "${OUTPUT}")"
 TMPOUT="${OUTPUT}.tmp"
 
 # Clean up partial output on failure

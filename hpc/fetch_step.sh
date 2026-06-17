@@ -82,12 +82,13 @@ remote_path() {
     echo "${base}/${init}/wrfout_d02_${d}_${h}:00:00"
 }
 
-# Expanded output GRIB path for a given target date/hour.
+# Expanded output GRIB path for a given target date/hour (under a YYYY/MM tree).
 grib_path() {
-    local d="$1" h="$2" out year dcompact
+    local d="$1" h="$2" out year month dcompact
     year="${d:0:4}"
+    month="${d:5:2}"
     dcompact="${d//-/}"
-    out="${GRIB_DIR}/${GRIB_TEMPLATE}"
+    out="${GRIB_DIR}/${year}/${month}/${GRIB_TEMPLATE}"
     out="${out//\{year\}/$year}"
     out="${out//\{date_compact\}/$dcompact}"
     out="${out//\{hour:02d\}/$h}"

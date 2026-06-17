@@ -108,7 +108,7 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log):
     print(f"#  {'timestep':16}  {'state':18}  detail")
     for dt in hours:
         dts = dt.strftime("%Y-%m-%dT%H")
-        gp = os.path.join(grib_dir, grib_name(grib_template, dt))
+        gp = os.path.join(grib_dir, f"{dt.year:04d}", f"{dt.month:02d}", grib_name(grib_template, dt))
         if os.path.exists(gp):
             state, detail = "DONE", ""
             done += 1
