@@ -42,7 +42,8 @@ wrfout_d02_*
 *.h5
 
 # Project-specific exclusions
-outputs/          # Hydra run directories
+# Hydra run directories
+outputs/
 anemoi_data/
 test/
 zarr_anemoi/
