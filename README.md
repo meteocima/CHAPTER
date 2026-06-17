@@ -32,6 +32,8 @@ This pipeline performs two main conversions:
 - `wrf_era5_comparison.py` - WRF to ECMWF variable mapping and paramId definitions
 - `wrf_anemoi_recipe.yaml` - Anemoi dataset recipe configuration
 - `run_anemoi_pipeline.sh` - Anemoi pipeline automation script
+- `meteoswiss_variable_comparison.md` - Column-by-column comparison of the MeteoSwiss/ERA5/COSMO
+  variable lists vs the pipeline output (what is selected, disabled, or supplied by Anemoi forcings)
 
 ### HPC Pipeline (Leonardo ↔ SuperMUC)
 - `hpc/submit_pipeline.py` - Orchestrator: submits SLURM fetch+convert jobs per day over a date range
@@ -95,14 +97,20 @@ uv run convert_to_pressure_levels.py
 - Mercator projection encoding with proper grid parameters
 - ECMWF paramId mapping (table 128)
 - Unit conversions (geopotential, radiation, precipitation)
-- Ocean masking for SST (land/sea distinction via LANDMASK)
-- Bitmap support for missing values
-- Derived variables: specific humidity, TCW, skin temperature, slope of orography
+- **Lossless GRIB1 second-order packing** (~37% smaller: ≈590 → ≈370 MB/timestep, bit-identical)
+- Bitmap support for missing values; ocean masking for SST via LANDMASK (when SST enabled)
+- Derived variables: specific humidity, TCW (total column water), **TQV** (total column water
+  vapour), **TCC** (total cloud cover, maximum-random overlap of CLDFRA), skin temperature
+  (Stefan-Boltzmann inversion of LWUPB), slope of orography
+- Variable selection aligned to the MeteoSwiss/COSMO training lists — see
+  [meteoswiss_variable_comparison.md](meteoswiss_variable_comparison.md)
 
-**Key Variables**:
-- **3D (pressure levels)**: t, u, v, w, z, q, r, pv, cc
-- **2D surface**: 2t, 2d, sp, msl, sst, skt, 10u, 10v
+**Key Variables** (active set):
+- **3D (pressure levels)**: t, u, v, w, z, q
+- **2D surface**: 2t, 2d, sp, msl, skt, 10u, 10v, tp, tcw, tcwv (tqv), tcc
 - **Static**: z (orography), lsm, sdor, slor
+- **Disabled** (commented in `wrf_era5_comparison.py`, re-enable by uncommenting): cc, r, pv,
+  pt/theta, sst, ci, slt, strd, ssrd, 2m specific humidity
 
 ### Workflow 2: CHAPTER → Anemoi ZARR (ML Framework)
 
@@ -227,29 +235,52 @@ The driver on `lrd_all_serial` needs no account; convert jobs on `dcgp_usr_prod`
 `slurm.step_convert_account` (default `aifpt_ailamit_0`).
 
 ## Variables Included (ECMWF parameter table 128)
-### Atmospheric 3D (pressure levels)
-- `t`, `theta`, `td` - Temperature variables
-- `r`, `q` - Moisture
-- `z`, `pv` - Dynamics
+
+The active set is aligned to the variables used by the MeteoSwiss/COSMO training lists. See
+[meteoswiss_variable_comparison.md](meteoswiss_variable_comparison.md) for the full
+column-by-column comparison, the derivation of each field, and the rationale for what was
+enabled/disabled.
+
+### Atmospheric 3D (13 pressure levels, 1000-50 hPa)
+- `t`, `q` - Temperature, specific humidity
+- `z` - Geopotential
 - `u`, `v`, `w` - Wind components
-- `cc` - Cloud fraction
 
-### Surface 2D
-- `2t`, `2d` - 2m temperature and moisture
+### Surface / single-level 2D
+- `2t`, `2d` - 2m temperature and dewpoint
 - `10u`, `10v` - 10m wind
-- `sp`, `msl` - Pressure
-- `sst`, `skt` - Surface temperature
-- `tcw` - Total column water
+- `sp`, `msl` - Surface and mean-sea-level pressure
+- `skt` - Skin temperature (Stefan-Boltzmann inversion of `LWUPB`, ε=0.98)
+- `tp` - Total precipitation (grid-scale, `RAINNC`)
+- `tcw` - Total column water (vapour + all hydrometeors)
+- `tcwv` (`tqv`) - Total column water vapour (vertical integral of `QVAPOR`)
+- `tcc` - Total cloud cover (maximum-random overlap of `CLDFRA`)
 
-### Static Fields
-- `z` - Terrain height
-- `lsm`, `ci` - Surface type
-- `sdor`, `slor`,  - Orographic parameters
+### Static fields
+- `z` - Terrain height (geopotential)
+- `lsm` - Land-sea mask
+- `sdor`, `slor` - Orographic parameters
 
-<!-- ### Encoding Variables
-- `sin_latitude`, `cos_longitude`, `sin_longitude`
-- `sin_julian_day`, `cos_julian_day`
-- `sin_local_time`, `cos_local_time` -->
+### Disabled (commented out — re-enable in `wrf_era5_comparison.py`)
+Not present in any MeteoSwiss/ERA5/COSMO list, so disabled to keep GRIBs lean:
+`cc` (cloud fraction per level), `r` (relative humidity), `pt`/`theta` (potential temperature),
+`pv` (potential vorticity), `sst`, `ci` (sea ice), `slt` (soil type), `strd`/`ssrd` (downward
+radiation), 2m specific humidity.
+
+### Forcings (added by Anemoi, not by the GRIB conversion)
+The temporal/positional features used in training (`cos/sin_latitude`, `cos/sin_longitude`,
+`cos/sin_julian_day`, `cos/sin_local_time`, `insolation`) are **not** encoded in GRIB. They are
+generated at dataset build time via a `forcings` source in the Anemoi recipe `input`:
+
+```yaml
+input:
+  join:
+    - grib: { path: output/ailam-an-cima-3km-*.grib }
+    - forcings:
+        template: ${input.join.0.grib}
+        param: [cos_latitude, sin_latitude, cos_longitude, sin_longitude,
+                cos_julian_day, sin_julian_day, cos_local_time, sin_local_time, insolation]
+```
 
 
 ## References
