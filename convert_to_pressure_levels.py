@@ -203,7 +203,9 @@ def main(input_file, output_file, debug_vars=None):
     print("\n=== CALCULATING DERIVED VARIABLES ===")
 
     # 3D derived variables to interpolate
-    derived_3d = ['tk', 'theta', 'rh', 'z', 'pvo']
+    # DISABLED 2026-06: 'theta','rh','pvo' not requested by any MeteoSwiss/ERA5/COSMO column
+    # (mapping commented out in wrf_era5_comparison.py). Re-add here AND uncomment there to re-enable.
+    derived_3d = ['tk', 'z']  # was: ['tk', 'theta', 'rh', 'z', 'pvo']
     for var_name in derived_3d:
         if var_name not in WRF_TO_ECMWF_PARAMID:
             continue
@@ -288,8 +290,8 @@ def main(input_file, output_file, debug_vars=None):
 
     # Cache QVAPOR for reuse in specific humidity and TCW calculations
     _qvapor_cache = None
-    if ('q' in WRF_TO_ECMWF_PARAMID or 'tcw' in WRF_TO_ECMWF_PARAMID):
-        if not debug_vars or any(v in debug_vars for v in ['q', 'tcw']):
+    if any(v in WRF_TO_ECMWF_PARAMID for v in ['q', 'tcw', 'tqv']):
+        if not debug_vars or any(v in debug_vars for v in ['q', 'tcw', 'tqv']):
             _qvapor_cache = wrf.getvar(ncfile, "QVAPOR", timeidx=0)
 
     # Specific humidity from QVAPOR (interpolated)
@@ -341,6 +343,44 @@ def main(input_file, output_file, debug_vars=None):
             print(f"  tcw (shape: {tcw.shape}, range: {np.nanmin(tcw):.2f}-{np.nanmax(tcw):.2f} kg/m^2)")
         except Exception as e:
             print(f"  tcw: {str(e)}")
+
+    # Total Column Water Vapour (TQV/tcwv) - vertical integral of QVAPOR only
+    # (mirrors the tcw integration but with vapour alone; uses mixing ratio like tcw)
+    if 'tqv' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'tqv' in debug_vars):
+        print("Calculating TQV (Total Column Water Vapour)...")
+        try:
+            qvapor = _qvapor_cache if _qvapor_cache is not None else wrf.getvar(ncfile, "QVAPOR", timeidx=0)
+            pressure = wrf.getvar(ncfile, "pressure", timeidx=0)  # hPa
+            g = 9.81  # m/s^2
+            dp = np.abs(np.diff(pressure.values * 100, axis=0))  # hPa -> Pa, absolute
+            dp = np.concatenate([dp, np.zeros_like(dp[-1:, :, :])], axis=0)  # Zero padding at top
+            tqv = np.sum(qvapor.values * dp / g, axis=0)  # kg/m^2
+            output_vars['tqv'] = tqv
+            print(f"  tqv (shape: {tqv.shape}, range: {np.nanmin(tqv):.2f}-{np.nanmax(tqv):.2f} kg/m^2)")
+        except Exception as e:
+            print(f"  tqv: {str(e)}")
+
+    # Total Cloud Cover (TCC) from 3D cloud fraction (maximum-random overlap, as ECMWF/RRTMG)
+    if 'tcc' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'tcc' in debug_vars):
+        print("Calculating TCC (Total Cloud Cover, maximum-random overlap)...")
+        try:
+            cldfra = wrf.getvar(ncfile, "CLDFRA", timeidx=0).values  # (lev, lat, lon), 0..1
+            cldfra = np.clip(cldfra, 0.0, 1.0)
+            nlev = cldfra.shape[0]
+            # C_tot = 1 - (1-C_1) * prod_{k=2..N} (1 - max(C_k,C_{k-1})) / (1 - C_{k-1})
+            eps = 1e-6
+            clear = 1.0 - cldfra[0]
+            prev = cldfra[0]
+            for k in range(1, nlev):
+                cur = cldfra[k]
+                denom = np.maximum(1.0 - prev, eps)
+                clear = clear * (1.0 - np.maximum(cur, prev)) / denom
+                prev = cur
+            tcc = np.clip(1.0 - clear, 0.0, 1.0)
+            output_vars['tcc'] = tcc
+            print(f"  tcc (shape: {tcc.shape}, range: {np.nanmin(tcc):.2f}-{np.nanmax(tcc):.2f})")
+        except Exception as e:
+            print(f"  tcc: {str(e)}")
 
     # Skin temperature from longwave radiation (Stefan-Boltzmann)
     if 'skt' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'skt' in debug_vars):
@@ -462,6 +502,8 @@ def main(input_file, output_file, debug_vars=None):
                         data_flat = np.where(np.isnan(data_flat), 0.0, data_flat)
 
                     codes_set_values(gid, data_flat)
+                    # Lossless compression: set AFTER values so second-order grouping is computed (~-37%)
+                    codes_set(gid, 'packingType', 'grid_second_order')
                     codes_write(gid, fout)
                     codes_release(gid)
                     written_count += 1
@@ -511,8 +553,8 @@ def main(input_file, output_file, debug_vars=None):
                 elif var_name == 'slp':
                     codes_set(gid, 'indicatorOfTypeOfLevel', 102)  # mean sea level
                     codes_set(gid, 'level', 0)
-                # Total column water (entire atmosphere)
-                elif var_name == 'tcw':
+                # Column-integrated / entire-atmosphere fields: tcw, tqv (vapour), tcc (cloud cover)
+                elif var_name in ['tcw', 'tqv', 'tcc']:
                     codes_set(gid, 'indicatorOfTypeOfLevel', 200)  # entire atmosphere
                     codes_set(gid, 'level', 0)
                 # Other variables: surface
@@ -536,6 +578,8 @@ def main(input_file, output_file, debug_vars=None):
                     data_flat = np.where(np.isnan(data_flat), 0.0, data_flat)
 
                 codes_set_values(gid, data_flat)
+                # Lossless compression: set AFTER values so second-order grouping is computed (~-37%)
+                codes_set(gid, 'packingType', 'grid_second_order')
                 codes_write(gid, fout)
                 codes_release(gid)
                 written_count += 1

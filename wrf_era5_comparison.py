@@ -34,17 +34,21 @@ CORRECTIONS from previous version:
 # Structure: {wrf_var: {'shortName': ecmwf_shortname, 'paramId': ecmwf_paramid, 'long_name': description, 'units': units}}
 
 WRF_TO_ECMWF_PARAMID = {
-    'CLDFRA': {'shortName': 'cc', 'paramId': 248, 'long_name': 'Cloud Fraction', 'units': 'fraction'},
-    'ACLWDNB': {'shortName': 'strd', 'paramId': 175, 'long_name': 'Surface Thermal Radiation Downwards (accumulated)', 'units': 'J/m^2'},
+    # DISABLED 2026-06: not requested by any MeteoSwiss/ERA5/COSMO column (see meteoswiss_variable_comparison.md). Re-enable if needed.
+    #'CLDFRA': {'shortName': 'cc', 'paramId': 248, 'long_name': 'Cloud Fraction', 'units': 'fraction'},
+    # DISABLED 2026-06: not requested by any column. Re-enable if needed.
+    #'ACLWDNB': {'shortName': 'strd', 'paramId': 175, 'long_name': 'Surface Thermal Radiation Downwards (accumulated)', 'units': 'J/m^2'},
     #'HFX': {'shortName': 'sshf', 'paramId': 146, 'long_name': 'Time-Integrated Surface Sensible Heat Net Flux', 'units': 'J/m^2'},
     'HGT': {'shortName': 'z', 'paramId': 129, 'long_name': 'Geopotential', 'units': 'm^2/s^2'},
-    'ISLTYP': {'shortName': 'slt', 'paramId': 43, 'long_name': 'Dominant Soil Category', 'units': 'category'},
+    # DISABLED 2026-06: not requested by any column. Re-enable if needed.
+    #'ISLTYP': {'shortName': 'slt', 'paramId': 43, 'long_name': 'Dominant Soil Category', 'units': 'category'},
     #'IVGTYP': {'shortName': 'tvl', 'paramId': 29, 'long_name': 'Dominant Vegetation Category', 'units': 'category'},
     'LANDMASK': {'shortName': 'lsm', 'paramId': 172, 'long_name': 'Land Mask (1=land, 0=water)', 'units': 'fraction'},
     #'LH': {'shortName': 'slhf', 'paramId': 147, 'long_name': 'Time-Integrated Surface Latent Heat Net Flux', 'units': 'J/m^2'},
     #'LU_INDEX': {'shortName': 'tvh', 'paramId': 30, 'long_name': 'Land Use Category', 'units': 'category'},
     'PSFC': {'shortName': 'sp', 'paramId': 134, 'long_name': 'Surface Pressure', 'units': 'Pa'},
-    'Q2': {'shortName': 'q', 'paramId': 133, 'long_name': '2m Specific Humidity', 'units': 'kg/kg'},
+    # DISABLED 2026-06: 2m specific humidity not requested by any column (lists use 2d/2t at 2m, q only at levels). Re-enable if needed.
+    #'Q2': {'shortName': 'q', 'paramId': 133, 'long_name': '2m Specific Humidity', 'units': 'kg/kg'},
     #'QCLOUD': {'shortName': 'clwc', 'paramId': 246, 'long_name': 'Specific Cloud Liquid Water Content', 'units': 'kg/kg'},
     #'QICE': {'shortName': 'ciwc', 'paramId': 247, 'long_name': 'Specific Cloud Ice Water Content', 'units': 'kg/kg'},
     #'QRAIN': {'shortName': 'crwc', 'paramId': 75, 'long_name': 'Specific Rain Water Content', 'units': 'kg/kg'},
@@ -52,12 +56,15 @@ WRF_TO_ECMWF_PARAMID = {
     #'QVAPOR': {'shortName': 'q', 'paramId': 133, 'long_name': 'Specific Humidity', 'units': 'kg/kg'},
     #'RAINC': {'shortName': 'cp', 'paramId': 228143, 'long_name': 'Accumulated Convective Precipitation', 'units': 'mm'},
     'RAINNC': {'shortName': 'tp', 'paramId': 228, 'long_name': 'Total precipitation', 'units': 'm'},
-    'SEAICE': {'shortName': 'ci', 'paramId': 31, 'long_name': 'Sea Ice Flag', 'units': 'fraction'},
+    # DISABLED 2026-06: not requested by any column. Re-enable if needed.
+    #'SEAICE': {'shortName': 'ci', 'paramId': 31, 'long_name': 'Sea Ice Flag', 'units': 'fraction'},
     #'SMOIS': {'shortName': 'swvl1', 'paramId': 39, 'long_name': 'Volumetric Soil Water Layer 1', 'units': 'm^3/m^3'},
     #'SNOW': {'shortName': 'sf', 'paramId': 228144, 'long_name': 'Snow Water Equivalent', 'units': 'kg/m^2'},
     #'SNOWH': {'shortName': 'sd', 'paramId': 228141, 'long_name': 'Physical Snow Depth', 'units': 'm'},
-    'SST': {'shortName': 'sst', 'paramId': 34, 'long_name': 'Sea Surface Temperature', 'units': 'K'},
-    'ACSWDNB': {'shortName': 'ssrd', 'paramId': 169, 'long_name': 'Surface Solar Radiation Downwards (accumulated)', 'units': 'J/m^2'},
+    # DISABLED 2026-06: not requested by any column. Re-enable if needed.
+    #'SST': {'shortName': 'sst', 'paramId': 34, 'long_name': 'Sea Surface Temperature', 'units': 'K'},
+    # DISABLED 2026-06: not requested by any column. Re-enable if needed.
+    #'ACSWDNB': {'shortName': 'ssrd', 'paramId': 169, 'long_name': 'Surface Solar Radiation Downwards (accumulated)', 'units': 'J/m^2'},
     #'T': {'shortName': 't', 'paramId': 500014, 'long_name': 'Temperature', 'units': 'K'},
     'T2': {'shortName': '2t', 'paramId': 167, 'long_name': '2m Temperature', 'units': 'K'},
     #'TSLB': {'shortName': 'stl1', 'paramId': 139, 'long_name': 'Soil Temperature Level 1', 'units': 'K'},
@@ -69,17 +76,23 @@ WRF_TO_ECMWF_PARAMID = {
     #'VAR': {'shortName': 'sdor', 'paramId': 160, 'long_name': 'Variance of Orography', 'units': 'm^2'},
     'VAR_SSO': {'shortName': 'sdor', 'paramId': 160, 'long_name': 'Standard Deviation of Subgrid-Scale Orography', 'units': 'm'},
     'W': {'shortName': 'w', 'paramId': 40, 'long_name': 'Vertical Velocity', 'units': 'm/s'},
-    'pvo': {'shortName': 'pv', 'paramId': 60, 'long_name': 'Potential Vorticity', 'units': 'PVU'},
-    'rh': {'shortName': 'r', 'paramId': 157, 'long_name': 'Relative Humidity', 'units': '%'},
+    # DISABLED 2026-06: not requested by any column. Re-enable if needed.
+    #'pvo': {'shortName': 'pv', 'paramId': 60, 'long_name': 'Potential Vorticity', 'units': 'PVU'},
+    # DISABLED 2026-06: not requested by any column. Re-enable if needed.
+    #'rh': {'shortName': 'r', 'paramId': 157, 'long_name': 'Relative Humidity', 'units': '%'},
     'skt': {'shortName': 'skt', 'paramId': 235, 'long_name': 'Skin Temperature (from longwave radiation)', 'units': 'K'},
     'slp': {'shortName': 'msl', 'paramId': 151, 'long_name': 'Mean Sea Level Pressure', 'units': 'Pa'},
     'q': {'shortName': 'q', 'paramId': 133, 'long_name': 'Specific Humidity', 'units': 'kg/kg'},
     'td2': {'shortName': '2d', 'paramId': 168, 'long_name': '2m Dewpoint Temperature', 'units': 'K'},
-    'theta': {'shortName': 'pt', 'paramId': 3, 'long_name': 'Potential Temperature', 'units': 'K'},
+    # DISABLED 2026-06: not requested by any column. Re-enable if needed.
+    #'theta': {'shortName': 'pt', 'paramId': 3, 'long_name': 'Potential Temperature', 'units': 'K'},
     'tk': {'shortName': 't', 'paramId': 130, 'long_name': 'Temperature', 'units': 'K'},
     'z': {'shortName': 'z', 'paramId': 129, 'long_name': 'Geopotential', 'units': 'm^2/s^2'},
     'tcw': {'shortName': 'tcw', 'paramId': 136, 'long_name': 'Total column water', 'units': 'kg/m^2'},
     'slor': {'shortName': 'slor', 'paramId': 163, 'long_name': 'Slope of sub-gridscale orography', 'units': 'Numeric'},
+    # Requested by COSMO column (C): TQV=tcwv, CLCT=tcc. Derived (QVAPOR / CLDFRA).
+    'tqv': {'shortName': 'tcwv', 'paramId': 137, 'long_name': 'Total column water vapour', 'units': 'kg/m^2'},
+    'tcc': {'shortName': 'tcc', 'paramId': 164, 'long_name': 'Total cloud cover', 'units': 'fraction'},
 
 }
 
