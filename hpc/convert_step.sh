@@ -74,5 +74,5 @@ mv "${TMPOUT}" "${OUTPUT}"
 
 echo ""
 echo "Conversion successful. Cleaning up wrfout..."
-rm -f "${INPUT}"
+timeout 60 rm -f "${INPUT}"
 echo "Deleted: ${INPUT}"

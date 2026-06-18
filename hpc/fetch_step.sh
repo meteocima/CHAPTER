@@ -166,7 +166,7 @@ process_one() {
 
         if [ "$rc" -ne 0 ]; then
             snippet=$(tr '\n' ' ' <"$errf" | tr -s ' ' | cut -c1-200)
-            rm -f "$errf"; rm -f "$dest" 2>/dev/null || true
+            rm -f "$errf"; timeout 30 rm -f "$dest" 2>/dev/null || true
             if [ "$rc" -eq 124 ]; then
                 echo "  WARN [${dt}] TAPE_TIMEOUT (scp > ${FETCH_TIMEOUT}s)"
                 log_status "$dt" "TAPE_TIMEOUT" "scp exceeded ${FETCH_TIMEOUT}s; file likely migrated to tape -> ask LRZ to recall"
@@ -190,7 +190,7 @@ process_one() {
        ! ( cd "$PROJECT_DIR" && uv run python -c "import sys,netCDF4; netCDF4.Dataset(sys.argv[1]).close()" "$dest" ) >/dev/null 2>&1; then
         echo "  WARN [${dt}] UNREADABLE_TAPE (size=${size}B)"
         log_status "$dt" "UNREADABLE_TAPE" "size=${size}B not a readable NetCDF; likely tape stub/truncated -> ask LRZ to recall"
-        rm -f "$dest" 2>/dev/null || true
+        timeout 30 rm -f "$dest" 2>/dev/null || true
         return 1
     fi
 
