@@ -158,18 +158,26 @@ process_one() {
             else
                 rc=$?
             fi
-            # tape-recall hang (timeout) or missing source -> no point retrying
-            if [ "$rc" -eq 124 ]; then break; fi
+            # A genuinely missing source never appears -> stop retrying. A timeout
+            # (rc=124), though, is usually transient datamover/VM congestion (an scp
+            # crawling past ${FETCH_TIMEOUT}s while other transfers also succeed), NOT
+            # a file on tape -> retry it with a longer backoff. Only a persistent
+            # timeout across all attempts is logged as a problem.
             if grep -qiE 'No such file|not a regular file' "$errf"; then break; fi
-            sleep 5
+            if [ "$rc" -eq 124 ]; then
+                echo "  [${dt}] scp timed out (attempt ${attempt}/${max_attempts}); likely congestion, backing off"
+                sleep 30
+            else
+                sleep 5
+            fi
         done
 
         if [ "$rc" -ne 0 ]; then
             snippet=$(tr '\n' ' ' <"$errf" | tr -s ' ' | cut -c1-200)
             rm -f "$errf"; timeout 30 rm -f "$dest" 2>/dev/null || true
             if [ "$rc" -eq 124 ]; then
-                echo "  WARN [${dt}] TAPE_TIMEOUT (scp > ${FETCH_TIMEOUT}s)"
-                log_status "$dt" "TAPE_TIMEOUT" "scp exceeded ${FETCH_TIMEOUT}s; file likely migrated to tape -> ask LRZ to recall"
+                echo "  WARN [${dt}] FETCH_TIMEOUT (scp > ${FETCH_TIMEOUT}s x${max_attempts})"
+                log_status "$dt" "FETCH_TIMEOUT" "scp exceeded ${FETCH_TIMEOUT}s on all ${max_attempts} attempts; usually datamover/VM congestion (re-run re-entrant), occasionally a file truly on tape (recall only if it persists across re-runs)"
             elif echo "$snippet" | grep -qiE 'No such file|not a regular file'; then
                 echo "  WARN [${dt}] MISSING_ON_LRZ"
                 log_status "$dt" "MISSING_ON_LRZ" "$snippet"
@@ -182,14 +190,15 @@ process_one() {
         rm -f "$errf"
     fi
 
-    # Integrity check: size sanity + NetCDF header open. A tape stub copied as a
-    # placeholder, or a truncated transfer, fails here -> flag for recall.
+    # Integrity check: size sanity + NetCDF header open. A truncated/0-byte transfer
+    # (datamover hiccup) or, rarely, a tape stub fails here -> drop it and flag.
+    # Re-entrant re-run re-fetches; only a persistent failure points to real tape.
     local size
     size=$(stat -c%s "$dest" 2>/dev/null || echo 0)
     if [ "$size" -lt "$MIN_BYTES" ] || \
        ! ( cd "$PROJECT_DIR" && uv run python -c "import sys,netCDF4; netCDF4.Dataset(sys.argv[1]).close()" "$dest" ) >/dev/null 2>&1; then
-        echo "  WARN [${dt}] UNREADABLE_TAPE (size=${size}B)"
-        log_status "$dt" "UNREADABLE_TAPE" "size=${size}B not a readable NetCDF; likely tape stub/truncated -> ask LRZ to recall"
+        echo "  WARN [${dt}] UNREADABLE (size=${size}B)"
+        log_status "$dt" "UNREADABLE" "size=${size}B not a readable NetCDF; truncated/0-byte transfer or tape stub -> re-run re-entrant, recall only if it persists"
         timeout 30 rm -f "$dest" 2>/dev/null || true
         return 1
     fi

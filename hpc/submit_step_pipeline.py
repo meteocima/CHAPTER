@@ -64,8 +64,11 @@ def grib_name(template: str, dt: datetime) -> str:
     return template.format(year=dt.year, date_compact=dt.strftime("%Y%m%d"), hour=dt.hour)
 
 
-# Status-log tags that mean the timestep needs attention / a tape recall on LRZ.
-PROBLEM_TAGS = {"MISSING_ON_LRZ", "TAPE_TIMEOUT", "UNREADABLE_TAPE", "FETCH_ERROR"}
+# Status-log tags that mean the timestep needs attention (usually just a re-run;
+# a true tape recall only if it persists). Old tape-named tags kept for historical
+# ledger entries written before the rename.
+PROBLEM_TAGS = {"MISSING_ON_LRZ", "FETCH_TIMEOUT", "UNREADABLE", "FETCH_ERROR",
+                "TAPE_TIMEOUT", "UNREADABLE_TAPE"}
 CLEAR_TAGS = {"FETCH_OK", "CONVERT_SUBMITTED", "SKIP_GRIB_EXISTS"}
 
 
