@@ -38,6 +38,10 @@ paths:
   log_dir: ${paths.work_dir}/logs
   status_log: ${paths.log_dir}/step_pipeline_status.log  # append-only step ledger (driver-written)
   project_dir: .  # path to CHAPTER repo on Leonardo
+  # Optional skip-list: timesteps to skip a-priori (e.g. sources known to be on tape/OFFLINE,
+  # not yet recalled). Accepts either absolute wrfout paths (the mmlsattr stagelist) or bare
+  # YYYY-MM-DDTHH lines; '#'/blank ignored. Empty = skip nothing. Driver logs SKIP_OFFLINE.
+  skip_list: ""
 
 # SuperMUC remote configuration (day-based pipeline: rsync via SSH ControlMaster)
 supermuc:

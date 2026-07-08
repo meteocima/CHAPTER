@@ -68,7 +68,7 @@ def grib_name(template: str, dt: datetime) -> str:
 # a true tape recall only if it persists). Old tape-named tags kept for historical
 # ledger entries written before the rename.
 PROBLEM_TAGS = {"MISSING_ON_LRZ", "FETCH_TIMEOUT", "UNREADABLE", "FETCH_ERROR",
-                "TAPE_TIMEOUT", "UNREADABLE_TAPE"}
+                "TAPE_TIMEOUT", "UNREADABLE_TAPE", "SKIP_OFFLINE"}
 CLEAR_TAGS = {"FETCH_OK", "CONVERT_SUBMITTED", "SKIP_GRIB_EXISTS"}
 
 
@@ -139,6 +139,11 @@ def app(cfg: DictConfig):
     log_dir = cfg.paths.log_dir
     grib_template = cfg.grib.name_template
     status_log = cfg.paths.status_log
+    skip_list = cfg.paths.get("skip_list", "") or ""
+    if skip_list:
+        skip_list = os.path.abspath(skip_list)
+        if not os.path.exists(skip_list):
+            raise SystemExit(f"ERROR: paths.skip_list does not exist: {skip_list}")
     dry_run = bool(cfg.get("dry_run", False))
     report = bool(cfg.get("report", False))
     direction = str(cfg.pipeline.direction)
@@ -194,6 +199,7 @@ def app(cfg: DictConfig):
         "INIT_HOUR": str(cfg.datamover.init_hour),
         "LOG_DIR": log_dir,
         "STATUS_LOG": status_log,
+        "SKIP_LIST": skip_list,
         "DRIVER_LOG": driver_log,
         "DRIVER_SCRIPT": driver_script,
         "CONVERT_SCRIPT": convert_script,
@@ -210,6 +216,8 @@ def app(cfg: DictConfig):
         # show the planned fetch/convert and the detached respawn for the next batch.
         print(f"DRY RUN — would launch the driver on this login node ({socket.gethostname()})")
         print(f"  bash {driver_script}   (detached, logs -> {driver_log})")
+        if skip_list:
+            print(f"  skip-list: {skip_list}")
         print("\n--- driver preview (first batch) ---", flush=True)
         subprocess.run(["bash", driver_script], env=run_env, check=True)
         return
@@ -237,6 +245,8 @@ def app(cfg: DictConfig):
     print(f"Window: {start_dt}..{end_dt}  direction={direction}  start={current_dt}  "
           f"(batch<={cfg.batch.size}, parallel={cfg.batch.fetch_parallel}, "
           f"budget={cfg.pipeline.driver_max_seconds}s/process)")
+    if skip_list:
+        print(f"Skip-list:     {skip_list}")
     print(f"Driver log:    {driver_log}")
     print(f"Status ledger: {status_log}")
     print(f"Converts:      squeue -u $USER   (dcgp_usr_prod, account {convert_account})")

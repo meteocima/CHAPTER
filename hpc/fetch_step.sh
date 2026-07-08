@@ -48,6 +48,7 @@ FETCH_TIMEOUT="${FETCH_TIMEOUT:-600}"
 FETCH_RETRIES="${FETCH_RETRIES:-2}"
 STATUS_LOG="${STATUS_LOG:-${LOG_DIR}/step_pipeline_status.log}"
 DRIVER_LOG="${DRIVER_LOG:-${LOG_DIR}/fetch_step_driver.log}"
+SKIP_LIST="${SKIP_LIST:-}"
 # A genuine wrfout is ~8.6G; far below this after a "successful" scp is a tape
 # stub or a truncated transfer.
 MIN_BYTES="${MIN_WRFOUT_BYTES:-1073741824}"  # 1 GiB
@@ -244,6 +245,27 @@ if [ "${DRY_RUN}" != "1" ] && ! datamover_reachable; then
     exit 1
 fi
 
+# Load the a-priori skip-list (timesteps whose source is known unavailable, e.g. on
+# tape/OFFLINE and not yet recalled). Accepts absolute wrfout paths (the mmlsattr
+# stagelist) or bare YYYY-MM-DDTHH lines; '#'/blank ignored. Re-parsed each respawn
+# (SKIP_LIST is inherited via the environment, like STATUS_LOG).
+declare -A SKIP_SET=()
+if [ -n "${SKIP_LIST}" ] && [ -f "${SKIP_LIST}" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        [ -z "$line" ] && continue
+        case "$line" in \#*) continue ;; esac
+        if [[ "$line" =~ wrfout_d02_([0-9]{4}-[0-9]{2}-[0-9]{2})_([0-9]{2}): ]]; then
+            SKIP_SET["${BASH_REMATCH[1]}T${BASH_REMATCH[2]}"]=1
+        elif [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2})$ ]]; then
+            SKIP_SET["${BASH_REMATCH[1]}T${BASH_REMATCH[2]}"]=1
+        fi
+    done < "${SKIP_LIST}"
+    echo "Skip-list: ${SKIP_LIST}  (${#SKIP_SET[@]} timesteps to skip a-priori)"
+elif [ -n "${SKIP_LIST}" ]; then
+    echo "WARN: SKIP_LIST set but file not found: ${SKIP_LIST}"
+fi
+
 # All timestamp arithmetic is done in UTC (WRF timesteps are UTC) via epoch
 # seconds, to avoid local-timezone/DST artifacts in hour labels.
 CUR_DATE="${CURRENT_DT%T*}"; CUR_HOUR="${CURRENT_DT#*T}"
@@ -268,7 +290,10 @@ while [ "$processed" -lt "$BATCH_SIZE" ] && within_window "$CUR_EPOCH"; do
     h=$(TZ=UTC date -d "@${CUR_EPOCH}" +%H)
     dt="${d}T${h}"
 
-    if [ -f "$(grib_path "$d" "$h")" ]; then
+    if [ -n "${SKIP_SET[$dt]:-}" ]; then
+        echo "  [${dt}] on skip-list (source OFFLINE / not recalled), skipping."
+        log_status "$dt" "SKIP_OFFLINE" "on paths.skip_list; source unavailable (recall on LRZ then re-run)"
+    elif [ -f "$(grib_path "$d" "$h")" ]; then
         echo "  [${dt}] GRIB already exists, skipping."
         log_status "$dt" "SKIP_GRIB_EXISTS" ""
     elif [ "${DRY_RUN}" = "1" ] || [ "${FETCH_PARALLEL}" -le 1 ]; then
