@@ -49,6 +49,9 @@ FETCH_RETRIES="${FETCH_RETRIES:-2}"
 STATUS_LOG="${STATUS_LOG:-${LOG_DIR}/step_pipeline_status.log}"
 DRIVER_LOG="${DRIVER_LOG:-${LOG_DIR}/fetch_step_driver.log}"
 SKIP_LIST="${SKIP_LIST:-}"
+# Login nodes cannot ssh/pkill one another, so a flag file on the shared FS is the
+# only way to stop a driver chain from a different login node than it runs on.
+STOP_FLAG="${STOP_FLAG:-${LOG_DIR}/fetch_step.stop}"
 # A genuine wrfout is ~8.6G; far below this after a "successful" scp is a tape
 # stub or a truncated transfer.
 MIN_BYTES="${MIN_WRFOUT_BYTES:-1073741824}"  # 1 GiB
@@ -66,6 +69,12 @@ log_status() {
     else
         printf '%s | %s | %s | %s\n' "$ts" "$1" "$2" "${3:-}" >> "${STATUS_LOG}"
     fi
+}
+
+# Has a stop been requested? Checked at startup, before each timestep, and before
+# the respawn, so the chain dies within one in-flight scp rather than at the window edge.
+stop_requested() {
+    [ -n "${STOP_FLAG}" ] && [ -e "${STOP_FLAG}" ]
 }
 
 # Is the datamover reachable from this node? (TCP :22; the restricted shell
@@ -214,6 +223,10 @@ process_one() {
 # Re-spawn this driver detached for the next timestep (fresh login-node clock).
 respawn() {
     local next_dt="$1"
+    if stop_requested; then
+        echo "STOP flag present (${STOP_FLAG}); not respawning. Remove it and re-launch to resume."
+        return 0
+    fi
     if [ "${DRY_RUN}" = "1" ]; then
         echo "[DRY] setsid bash ${DRIVER_SCRIPT}   (CURRENT_DT=${next_dt})"
     else
@@ -233,6 +246,11 @@ echo "Budget:    ${DRIVER_MAX_SECONDS}s wall, batch<=${BATCH_SIZE}, ${FETCH_PARA
 echo "Datamover: ${DATAMOVER_HOST}  (vm: ${REMOTE_HOST})"
 echo "StatusLog: ${STATUS_LOG}"
 echo "Dry run:   ${DRY_RUN}"
+
+if stop_requested; then
+    echo "STOP flag present (${STOP_FLAG}); exiting without fetching. Remove it to resume."
+    exit 0
+fi
 echo ""
 
 mkdir -p "${LOG_DIR}" "$(dirname "${STATUS_LOG}")"
@@ -289,6 +307,11 @@ while [ "$processed" -lt "$BATCH_SIZE" ] && within_window "$CUR_EPOCH"; do
     d=$(TZ=UTC date -d "@${CUR_EPOCH}" +%Y-%m-%d)
     h=$(TZ=UTC date -d "@${CUR_EPOCH}" +%H)
     dt="${d}T${h}"
+
+    if stop_requested; then
+        echo "STOP flag present (${STOP_FLAG}); stopping batch before ${dt}."
+        break
+    fi
 
     if [ -n "${SKIP_SET[$dt]:-}" ]; then
         echo "  [${dt}] on skip-list (source OFFLINE / not recalled), skipping."
