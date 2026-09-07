@@ -9,7 +9,11 @@
 # node; it sftp's each wrfout via the datamover and submits the (heavy) convert to
 # dcgp_usr_prod via sbatch.
 #
-# Login-node processes are killed past ~30 min, so the driver works to a wall-time
+# The login-node limit is `ulimit -t` = 600s of CPU TIME per process (not wall time).
+# The transfer itself runs on the datamover -- data goes LRZ -> datamover -> the shared
+# FS, never through this node -- so the driver and its ssh sit at ~0s CPU and a process
+# survives for hours (measured). Only the NetCDF check costs CPU (~1.9s/file, and in its
+# own python process). The driver still works to a wall-time
 # budget (DRIVER_MAX_SECONDS) and then RE-SPAWNS ITSELF detached (setsid) for the
 # next batch -- each process stays well under the limit. The convert jobs are the
 # only SLURM jobs.

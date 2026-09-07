@@ -25,7 +25,8 @@ window:
 pipeline:
   direction: backward  # backward = newest->oldest (default); forward = oldest->newest
   # The fetch driver runs on a LOGIN NODE (the datamover is NOT reachable from
-  # lrd_all_serial / compute nodes). Login-node processes are killed past ~30 min,
+  # lrd_all_serial / compute nodes). The login-node cap is 600s of CPU time per
+  # process, which the driver never approaches (the datamover does the transfer),
   # so the driver works to this wall-time budget then re-spawns itself (detached)
   # for the next batch. Keep driver_max_seconds + datamover.fetch_timeout < ~1800.
   driver_max_seconds: 1080  # ~18 min per driver process before it re-spawns
