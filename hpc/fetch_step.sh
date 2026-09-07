@@ -6,7 +6,7 @@
 # (data.leonardo.cineca.it) is reachable only from regular login nodes -- NOT from
 # lrd_all_serial (login08/13 are firewalled off) nor compute nodes. So the fetch
 # cannot be a SLURM job. The launcher starts this script detached on the login
-# node; it scp's each wrfout via the datamover and submits the (heavy) convert to
+# node; it sftp's each wrfout via the datamover and submits the (heavy) convert to
 # dcgp_usr_prod via sbatch.
 #
 # Login-node processes are killed past ~30 min, so the driver works to a wall-time
@@ -16,7 +16,8 @@
 #
 # Per timestep it:
 #   1. skips it if the output GRIB already exists (re-entrancy)
-#   2. fetches the wrfout via:  ssh -xT <datamover> "scp -F <cfg> <vm>:<remote> <local>/"
+#   2. fetches the wrfout via:
+#         ssh -xT <datamover> "sftp -i <key> <opts> <relay>:<remote> <local>/"
 #      wrapped in `timeout` (cuts tape-recall hangs) with a few retries
 #   3. checks the file is a readable NetCDF (catches tape stubs / truncation)
 #   4. submits a convert_step.sh job (dcgp_usr_prod) for that timestep (async)
@@ -28,10 +29,10 @@
 #   DIRECTION                      - "backward" (newest->oldest, default) or "forward"
 #   BATCH_SIZE                     - max timesteps per process (time budget usually cuts first)
 #   DRIVER_MAX_SECONDS             - wall-time budget per process before re-spawning
-#   FETCH_PARALLEL                 - concurrent scp transfers
-#   FETCH_TIMEOUT, FETCH_RETRIES   - per-scp timeout (s) and retry count
+#   FETCH_PARALLEL                 - concurrent sftp transfers
+#   FETCH_TIMEOUT, FETCH_RETRIES   - per-sftp timeout (s) and retry count
 #   WRFOUT_DIR, GRIB_DIR, GRIB_TEMPLATE, PROJECT_DIR
-#   DATAMOVER_HOST, SSH_CONFIG, REMOTE_HOST, BASE_2023, BASE_PRE2023, INIT_HOUR
+#   DATAMOVER_HOST, REMOTE_HOST, IDENTITY_FILE, SFTP_OPTS, BASE_2023, BASE_PRE2023, INIT_HOUR
 #   LOG_DIR, STATUS_LOG, DRIVER_LOG, DRIVER_SCRIPT, CONVERT_SCRIPT
 #   CONVERT_PARTITION, CONVERT_WALLTIME, CONVERT_MEM, CONVERT_ACCOUNT
 #   DRY_RUN                        - "1" to print commands instead of running them
@@ -46,13 +47,15 @@ BATCH_SIZE="${BATCH_SIZE:-24}"
 DRIVER_MAX_SECONDS="${DRIVER_MAX_SECONDS:-1080}"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-600}"
 FETCH_RETRIES="${FETCH_RETRIES:-2}"
+IDENTITY_FILE="${IDENTITY_FILE:-}"
+SFTP_OPTS="${SFTP_OPTS:--B 262144 -R 256 -p}"
 STATUS_LOG="${STATUS_LOG:-${LOG_DIR}/step_pipeline_status.log}"
 DRIVER_LOG="${DRIVER_LOG:-${LOG_DIR}/fetch_step_driver.log}"
 SKIP_LIST="${SKIP_LIST:-}"
 # Login nodes cannot ssh/pkill one another, so a flag file on the shared FS is the
 # only way to stop a driver chain from a different login node than it runs on.
 STOP_FLAG="${STOP_FLAG:-${LOG_DIR}/fetch_step.stop}"
-# A genuine wrfout is ~8.6G; far below this after a "successful" scp is a tape
+# A genuine wrfout is ~8.6G; far below this after a "successful" sftp is a tape
 # stub or a truncated transfer.
 MIN_BYTES="${MIN_WRFOUT_BYTES:-1073741824}"  # 1 GiB
 DRIVER_START=$(date +%s)
@@ -72,7 +75,7 @@ log_status() {
 }
 
 # Has a stop been requested? Checked at startup, before each timestep, and before
-# the respawn, so the chain dies within one in-flight scp rather than at the window edge.
+# the respawn, so the chain dies within one in-flight sftp rather than at the window edge.
 stop_requested() {
     [ -n "${STOP_FLAG}" ] && [ -e "${STOP_FLAG}" ]
 }
@@ -83,7 +86,15 @@ datamover_reachable() {
     timeout 15 bash -c "cat < /dev/null > /dev/tcp/${DATAMOVER_HOST}/22" 2>/dev/null
 }
 
-# Remote wrfout path on the VM for a given target date/hour.
+# Inner command run ON the datamover to pull one file from the LRZ relay.
+#   $1 = remote path on the relay   $2 = local destination directory
+fetch_cmd() {
+    local id_arg=""
+    [ -n "${IDENTITY_FILE}" ] && id_arg="-i ${IDENTITY_FILE}"
+    echo "sftp ${id_arg} ${SFTP_OPTS} ${REMOTE_HOST}:$1 $2/"
+}
+
+# Remote wrfout path on the relay for a given target date/hour.
 remote_path() {
     local d="$1" h="$2" year init base
     year="${d:0:4}"
@@ -146,7 +157,7 @@ process_one() {
     mkdir -p "$local_dir"
 
     if [ "${DRY_RUN}" = "1" ]; then
-        echo "  [DRY] ssh -xT ${DATAMOVER_HOST} \"scp -F ${SSH_CONFIG} ${REMOTE_HOST}:${remote} ${local_dir}/\""
+        echo "  [DRY] ssh -xT ${DATAMOVER_HOST} \"$(fetch_cmd "$remote" "$local_dir")\""
         log_status "$dt" "FETCH_OK" "(dry-run)"
         submit_convert "$d" "$h"
         log_status "$dt" "CONVERT_SUBMITTED" "(dry-run)"
@@ -163,19 +174,22 @@ process_one() {
         for attempt in $(seq 1 "$max_attempts"); do
             echo "  [${dt}] fetch attempt ${attempt}/${max_attempts} via datamover..."
             if timeout "${FETCH_TIMEOUT}" ssh -xT "${DATAMOVER_HOST}" \
-                 "scp -F ${SSH_CONFIG} ${REMOTE_HOST}:${remote} ${local_dir}/" 2>"$errf"; then
+                 "$(fetch_cmd "$remote" "$local_dir")" 2>"$errf"; then
                 rc=0; break
             else
                 rc=$?
             fi
-            # A genuinely missing source never appears -> stop retrying. A timeout
-            # (rc=124), though, is usually transient datamover/VM congestion (an scp
+            # A genuinely missing source never appears -> stop retrying. sftp words it
+            # as 'File "<path>" not found.' or 'remote open(...): No such file or
+            # directory'; match 'File ... not found' rather than a bare 'not found' so a
+            # missing sftp binary on the datamover stays a FETCH_ERROR. A timeout
+            # (rc=124), though, is usually transient datamover/relay congestion (an sftp
             # crawling past ${FETCH_TIMEOUT}s while other transfers also succeed), NOT
             # a file on tape -> retry it with a longer backoff. Only a persistent
             # timeout across all attempts is logged as a problem.
-            if grep -qiE 'No such file|not a regular file' "$errf"; then break; fi
+            if grep -qiE 'No such file|not a regular file|File .* not found' "$errf"; then break; fi
             if [ "$rc" -eq 124 ]; then
-                echo "  [${dt}] scp timed out (attempt ${attempt}/${max_attempts}); likely congestion, backing off"
+                echo "  [${dt}] sftp timed out (attempt ${attempt}/${max_attempts}); likely congestion, backing off"
                 sleep 30
             else
                 sleep 5
@@ -186,9 +200,9 @@ process_one() {
             snippet=$(tr '\n' ' ' <"$errf" | tr -s ' ' | cut -c1-200)
             rm -f "$errf"; timeout 30 rm -f "$dest" 2>/dev/null || true
             if [ "$rc" -eq 124 ]; then
-                echo "  WARN [${dt}] FETCH_TIMEOUT (scp > ${FETCH_TIMEOUT}s x${max_attempts})"
-                log_status "$dt" "FETCH_TIMEOUT" "scp exceeded ${FETCH_TIMEOUT}s on all ${max_attempts} attempts; usually datamover/VM congestion (re-run re-entrant), occasionally a file truly on tape (recall only if it persists across re-runs)"
-            elif echo "$snippet" | grep -qiE 'No such file|not a regular file'; then
+                echo "  WARN [${dt}] FETCH_TIMEOUT (sftp > ${FETCH_TIMEOUT}s x${max_attempts})"
+                log_status "$dt" "FETCH_TIMEOUT" "sftp exceeded ${FETCH_TIMEOUT}s on all ${max_attempts} attempts; usually datamover/relay congestion (re-run re-entrant), occasionally a file truly on tape (recall only if it persists across re-runs)"
+            elif echo "$snippet" | grep -qiE 'No such file|not a regular file|File .* not found'; then
                 echo "  WARN [${dt}] MISSING_ON_LRZ"
                 log_status "$dt" "MISSING_ON_LRZ" "$snippet"
             else
@@ -243,7 +257,7 @@ echo "=== CHAPTER fetch_step @ $(hostname) $(date -u +%FT%TZ) ==="
 echo "Window:    ${START_DT} (oldest)  ..  ${END_DT} (newest)"
 echo "Direction: ${DIRECTION}    Current: ${CURRENT_DT}"
 echo "Budget:    ${DRIVER_MAX_SECONDS}s wall, batch<=${BATCH_SIZE}, ${FETCH_PARALLEL} parallel, fetch timeout ${FETCH_TIMEOUT}s"
-echo "Datamover: ${DATAMOVER_HOST}  (vm: ${REMOTE_HOST})"
+echo "Datamover: ${DATAMOVER_HOST}  (relay: ${REMOTE_HOST})"
 echo "StatusLog: ${STATUS_LOG}"
 echo "Dry run:   ${DRY_RUN}"
 

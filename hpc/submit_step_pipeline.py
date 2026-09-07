@@ -192,8 +192,9 @@ def app(cfg: DictConfig):
         "GRIB_TEMPLATE": grib_template,
         "PROJECT_DIR": project_dir,
         "DATAMOVER_HOST": cfg.datamover.host,
-        "SSH_CONFIG": cfg.datamover.ssh_config,
         "REMOTE_HOST": cfg.datamover.remote_host,
+        "IDENTITY_FILE": cfg.datamover.identity_file,
+        "SFTP_OPTS": cfg.datamover.sftp_opts,
         "BASE_2023": cfg.datamover.base_2023,
         "BASE_PRE2023": cfg.datamover.base_pre2023,
         "INIT_HOUR": str(cfg.datamover.init_hour),
@@ -231,7 +232,7 @@ def app(cfg: DictConfig):
             f"Run this launcher from a regular login node (NOT lrd_all_serial / compute)."
         )
 
-    # Launch the driver detached on THIS login node (survives logout); it scp's via
+    # Launch the driver detached on THIS login node (survives logout); it sftp's via
     # the datamover, sbatch's converts to dcgp_usr_prod, and respawns itself.
     os.makedirs(log_dir, exist_ok=True)
     logf = open(driver_log, "ab")

@@ -169,7 +169,7 @@ The pipeline is **re-entrant**: dates with all 24 GRIBs present are skipped, and
 squeue -u $USER
 ```
 
-### Workflow 4: Step-by-step Pipeline via Datamover (Leonardo ↔ chapteradmin VM)
+### Workflow 4: Step-by-step Pipeline via Datamover (Leonardo ↔ LRZ data relay)
 
 Process an **hourly time window** by fetching wrfout files through the **CINECA datamover**
 (`data.leonardo.cineca.it`). **Run it from a regular login node:** the datamover is reachable only
@@ -201,7 +201,7 @@ python hpc/submit_step_pipeline.py window.start_date=2025-06-30 window.start_hou
 2. The driver fetches timesteps until its wall-time budget (`pipeline.driver_max_seconds`, default
    ~18 min — login-node processes are killed past ~30 min) or `batch.size`, whichever first. Per step:
    - skips it if the output GRIB already exists (re-entrant);
-   - fetches the wrfout via `ssh -xT data.leonardo.cineca.it "scp -F <cfg> supermuc-vm:<remote> <local>/"`
+   - fetches the wrfout via `ssh -xT data.leonardo.cineca.it "sftp -i <key> -B 262144 -R 256 -p datarelay@rdmtests.srv.lrz.de:<remote> <local>/"`
      (wrapped in `timeout`, with `datamover.fetch_retries`; up to `batch.fetch_parallel` in flight);
    - validates the file is a readable NetCDF (size + header open);
    - submits a single-timestep **convert** job on `dcgp_usr_prod` (independent, runs in parallel).
@@ -213,8 +213,8 @@ python hpc/submit_step_pipeline.py window.start_date=2025-06-30 window.start_hou
 ```
 2025-...Z | 2025-06-30T23 | FETCH_OK | size=...B
 2025-...Z | 2025-06-30T23 | CONVERT_SUBMITTED | job=...
-2025-...Z | 2025-06-30T20 | MISSING_ON_LRZ | scp: ...: No such file or directory
-2025-...Z | 2025-06-30T19 | TAPE_TIMEOUT | scp exceeded 600s; file likely migrated to tape -> ask LRZ to recall
+2025-...Z | 2025-06-30T20 | MISSING_ON_LRZ | File "..." not found.
+2025-...Z | 2025-06-30T19 | FETCH_TIMEOUT | sftp exceeded 600s; usually congestion, occasionally tape -> recall if it persists
 2025-...Z | 2025-06-30T18 | UNREADABLE_TAPE | size=...B not a readable NetCDF; likely tape stub/truncated
 ```
 A missing or on-tape file is **logged and skipped, never fatal** — the chain keeps going. On LRZ,
@@ -229,7 +229,7 @@ python hpc/submit_step_pipeline.py window.start_date=2025-06-01 window.start_hou
 ```
 
 Init-folder mapping reuses the previous-day/18Z convention (`hpc/dates.py`), e.g. target
-`2025-06-30 00Z` → `…/CHAPTER-23-25/2025062918/wrfout_d02_2025-06-30_00:00:00`. The datamover/VM
+`2025-06-30 00Z` → `…/CHAPTER-23-25/2025062918/wrfout_d02_2025-06-30_00:00:00`. The datamover/relay
 paths (`datamover.*`) are configured separately from the rsync/DSS paths (`supermuc.*`).
 The driver on `lrd_all_serial` needs no account; convert jobs on `dcgp_usr_prod` charge
 `slurm.step_convert_account` (default `aifpt_ailamit_0`).

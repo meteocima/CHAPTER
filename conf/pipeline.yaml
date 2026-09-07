@@ -51,19 +51,20 @@ supermuc:
   init_hour: 18
 
 # Datamover-based fetch (step-by-step pipeline). Run from a LOGIN NODE: the driver
-# triggers an scp on the CINECA datamover, which reaches the chapteradmin VM.
+# triggers an sftp on the CINECA datamover, which reaches the LRZ data relay.
 # NB: data.leonardo.cineca.it is reachable from regular login nodes only, NOT from
-# lrd_all_serial (login08/13 are firewalled off). These are the VM-view paths,
+# lrd_all_serial (login08/13 are firewalled off). These are the relay-view paths,
 # different from supermuc.* (DSS view).
 datamover:
-  host: data.leonardo.cineca.it
-  ssh_config: /leonardo/home/userexternal/lmonaco0/.ssh/config
-  remote_host: supermuc-vm
-  base_2023: /home/chapteradmin/mnt/CHAPTER-23-25
-  base_pre2023: /home/chapteradmin/mnt/CHAPTER  # assumption: confirm if pre-2023 data is needed
+  host: data.leonardo.cineca.it                # the CINECA datamover hop (we ssh into it)
+  remote_host: datarelay@rdmtests.srv.lrz.de   # LRZ data relay, addressed as user@host
+  identity_file: /leonardo/home/userexternal/lmonaco0/.ssh/id_rsa  # key used by sftp ON the datamover
+  sftp_opts: "-B 262144 -R 256 -p"             # 256K buffer, 256 outstanding requests, preserve times
+  base_2023: /home/datarelay/mnt/CHAPTER-23-25
+  base_pre2023: /home/datarelay/mnt/CHAPTER  # assumption: confirm if pre-2023 data is needed
   init_hour: 18
-  fetch_timeout: 600  # s: scp wrapped in `timeout`; cuts tape-recall hangs well within the login limit
-  fetch_retries: 2    # retry transient scp failures before logging the timestep as failed
+  fetch_timeout: 600  # s: sftp wrapped in `timeout`; cuts tape-recall hangs well within the login limit
+  fetch_retries: 2    # retry transient sftp failures before logging the timestep as failed
 
 # Batch / parallelism for the step-by-step pipeline
 batch:
