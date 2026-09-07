@@ -21,6 +21,8 @@
 #      wrapped in `timeout` (cuts tape-recall hangs) with a few retries
 #   3. checks the file is a readable NetCDF (catches tape stubs / truncation)
 #   4. submits a convert_step.sh job (dcgp_usr_prod) for that timestep (async)
+#      -- UNLESS DOWNLOAD_ONLY=1, in which case it stops at step 3 and KEEPS the
+#      wrfout (convert_step.sh deletes it on success), for staging raw files.
 # Every outcome is appended to STATUS_LOG (single writer = this driver chain).
 # Missing / on-tape / unreadable files are logged and SKIPPED, never fatal.
 #
@@ -35,11 +37,16 @@
 #   DATAMOVER_HOST, REMOTE_HOST, IDENTITY_FILE, SFTP_OPTS, BASE_2023, BASE_PRE2023, INIT_HOUR
 #   LOG_DIR, STATUS_LOG, DRIVER_LOG, DRIVER_SCRIPT, CONVERT_SCRIPT
 #   CONVERT_PARTITION, CONVERT_WALLTIME, CONVERT_MEM, CONVERT_ACCOUNT
+#   DOWNLOAD_ONLY                  - "1" to fetch only: no convert submitted, wrfout kept
 #   DRY_RUN                        - "1" to print commands instead of running them
 
 set -euo pipefail
 
 DRY_RUN="${DRY_RUN:-0}"
+# Fetch-only mode: never submit a convert, keep the wrfout on disk. Exported so it
+# survives the respawn chain -- losing it mid-chain would silently start deleting
+# staged files (convert_step.sh removes its input on success).
+DOWNLOAD_ONLY="${DOWNLOAD_ONLY:-0}"; export DOWNLOAD_ONLY
 DIRECTION="${DIRECTION:-backward}"
 INIT_HOUR=$(printf "%02d" "$((10#${INIT_HOUR:-18}))")
 FETCH_PARALLEL="${FETCH_PARALLEL:-2}"
@@ -116,9 +123,32 @@ grib_path() {
     echo "$out"
 }
 
+# Is this timestep already done, and with which ledger tag? Prints the tag and
+# returns 0 when it can be skipped. In download-only mode the GRIB never exists, so
+# re-entrancy has to key on the staged wrfout instead -- and on its SIZE, or a
+# truncated leftover would be mistaken for a finished download.
+already_done() {
+    local d="$1" h="$2" raw
+    if [ "${DOWNLOAD_ONLY}" = "1" ]; then
+        raw="${WRFOUT_DIR}/${d}/wrfout_d02_${d}_${h}:00:00"
+        if [ -f "$raw" ] && [ "$(stat -c%s "$raw" 2>/dev/null || echo 0)" -ge "$MIN_BYTES" ]; then
+            echo "SKIP_RAW_EXISTS"; return 0
+        fi
+    elif [ -f "$(grib_path "$d" "$h")" ]; then
+        echo "SKIP_GRIB_EXISTS"; return 0
+    fi
+    return 1
+}
+
 # Submit a convert job for one timestep. Real mode echoes ONLY the job id
 # (--parsable); dry mode prints the command.
 submit_convert() {
+    # Structural guard: in download-only mode a convert must never reach sbatch --
+    # it would delete the wrfout we just staged. Belt and braces with the call sites.
+    if [ "${DOWNLOAD_ONLY}" = "1" ]; then
+        echo "  [BUG] submit_convert called in download-only mode; refusing." >&2
+        return 0
+    fi
     local d="$1" h="$2" dcompact local_dir convert_env
     dcompact="${d//-/}"
     local_dir="${WRFOUT_DIR}/${d}"
@@ -159,14 +189,20 @@ process_one() {
     if [ "${DRY_RUN}" = "1" ]; then
         echo "  [DRY] ssh -xT ${DATAMOVER_HOST} \"$(fetch_cmd "$remote" "$local_dir")\""
         log_status "$dt" "FETCH_OK" "(dry-run)"
-        submit_convert "$d" "$h"
-        log_status "$dt" "CONVERT_SUBMITTED" "(dry-run)"
+        if [ "${DOWNLOAD_ONLY}" != "1" ]; then
+            submit_convert "$d" "$h"
+            log_status "$dt" "CONVERT_SUBMITTED" "(dry-run)"
+        fi
         return 0
     fi
 
-    if [ -s "$dest" ]; then
+    # -s alone would accept a multi-GB partial left by a driver killed mid-sftp:
+    # the fetch would be skipped, the size gate below would then delete it, and the
+    # timestep would only come back on a later full re-run. Re-fetch it instead.
+    if [ -s "$dest" ] && [ "$(stat -c%s "$dest" 2>/dev/null || echo 0)" -ge "$MIN_BYTES" ]; then
         echo "  [${dt}] wrfout already present locally."
     else
+        [ -e "$dest" ] && { echo "  [${dt}] partial wrfout on disk, re-fetching."; timeout 30 rm -f "$dest" 2>/dev/null || true; }
         local attempt rc errf snippet max_attempts
         max_attempts=$((FETCH_RETRIES + 1))
         errf=$(mktemp)
@@ -228,6 +264,10 @@ process_one() {
     fi
 
     log_status "$dt" "FETCH_OK" "size=${size}B"
+    if [ "${DOWNLOAD_ONLY}" = "1" ]; then
+        echo "  [${dt}] fetched (download-only: no convert, wrfout kept)."
+        return 0
+    fi
     local jobid
     jobid=$(submit_convert "$d" "$h")
     echo "  [${dt}] convert submitted (job ${jobid})"
@@ -242,9 +282,10 @@ respawn() {
         return 0
     fi
     if [ "${DRY_RUN}" = "1" ]; then
-        echo "[DRY] setsid bash ${DRIVER_SCRIPT}   (CURRENT_DT=${next_dt})"
+        echo "[DRY] setsid bash ${DRIVER_SCRIPT}   (CURRENT_DT=${next_dt}, DOWNLOAD_ONLY=${DOWNLOAD_ONLY})"
     else
-        CURRENT_DT="${next_dt}" setsid bash "${DRIVER_SCRIPT}" >> "${DRIVER_LOG}" 2>&1 < /dev/null &
+        CURRENT_DT="${next_dt}" DOWNLOAD_ONLY="${DOWNLOAD_ONLY}" \
+            setsid bash "${DRIVER_SCRIPT}" >> "${DRIVER_LOG}" 2>&1 < /dev/null &
         echo "Respawned driver (pid $!) for ${next_dt}."
     fi
 }
@@ -259,6 +300,12 @@ echo "Direction: ${DIRECTION}    Current: ${CURRENT_DT}"
 echo "Budget:    ${DRIVER_MAX_SECONDS}s wall, batch<=${BATCH_SIZE}, ${FETCH_PARALLEL} parallel, fetch timeout ${FETCH_TIMEOUT}s"
 echo "Datamover: ${DATAMOVER_HOST}  (relay: ${REMOTE_HOST})"
 echo "StatusLog: ${STATUS_LOG}"
+if [ "${DOWNLOAD_ONLY}" = "1" ]; then
+    echo "Mode:      DOWNLOAD_ONLY (no convert, wrfout kept)"
+else
+    echo "Mode:      fetch + convert"
+fi
+echo "RawDir:    ${WRFOUT_DIR}"
 echo "Dry run:   ${DRY_RUN}"
 
 if stop_requested; then
@@ -330,9 +377,12 @@ while [ "$processed" -lt "$BATCH_SIZE" ] && within_window "$CUR_EPOCH"; do
     if [ -n "${SKIP_SET[$dt]:-}" ]; then
         echo "  [${dt}] on skip-list (source OFFLINE / not recalled), skipping."
         log_status "$dt" "SKIP_OFFLINE" "on paths.skip_list; source unavailable (recall on LRZ then re-run)"
-    elif [ -f "$(grib_path "$d" "$h")" ]; then
-        echo "  [${dt}] GRIB already exists, skipping."
-        log_status "$dt" "SKIP_GRIB_EXISTS" ""
+    elif done_tag=$(already_done "$d" "$h"); then
+        case "$done_tag" in
+            SKIP_RAW_EXISTS) echo "  [${dt}] wrfout already staged, skipping." ;;
+            *)               echo "  [${dt}] GRIB already exists, skipping." ;;
+        esac
+        log_status "$dt" "$done_tag" ""
     elif [ "${DRY_RUN}" = "1" ] || [ "${FETCH_PARALLEL}" -le 1 ]; then
         process_one "$d" "$h" || true
     else

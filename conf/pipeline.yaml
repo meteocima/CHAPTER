@@ -29,6 +29,10 @@ pipeline:
   # so the driver works to this wall-time budget then re-spawns itself (detached)
   # for the next batch. Keep driver_max_seconds + datamover.fetch_timeout < ~1800.
   driver_max_seconds: 1080  # ~18 min per driver process before it re-spawns
+  # Fetch the wrfout files and STOP there: no convert job is submitted, so the
+  # downloaded wrfout is KEPT (convert_step.sh deletes it on success). Used to
+  # stage raw files for someone else; pair it with a dedicated paths.wrfout_dir.
+  download_only: false
 
 # Paths on Leonardo
 paths:
@@ -37,6 +41,10 @@ paths:
   grib_dir: ${paths.work_dir}/grib
   log_dir: ${paths.work_dir}/logs
   status_log: ${paths.log_dir}/step_pipeline_status.log  # append-only step ledger (driver-written)
+  # Per-chain files: override all three (with status_log) when running a second
+  # driver chain, or a stop request / ledger of one chain would hit the other.
+  driver_log: ${paths.log_dir}/fetch_step_driver.log  # driver narrative (stdout of the chain)
+  stop_flag: ${paths.log_dir}/fetch_step.stop        # touch it to stop the chain cross-node
   project_dir: .  # path to CHAPTER repo on Leonardo
   # Optional skip-list: timesteps to skip a-priori (e.g. sources known to be on tape/OFFLINE,
   # not yet recalled). Accepts either absolute wrfout paths (the mmlsattr stagelist) or bare
@@ -61,7 +69,7 @@ datamover:
   identity_file: /leonardo/home/userexternal/lmonaco0/.ssh/id_rsa  # key used by sftp ON the datamover
   sftp_opts: "-B 262144 -R 256 -p"             # 256K buffer, 256 outstanding requests, preserve times
   base_2023: /home/datarelay/mnt/CHAPTER-23-25
-  base_pre2023: /home/datarelay/mnt/CHAPTER  # assumption: confirm if pre-2023 data is needed
+  base_pre2023: /home/datarelay/mnt/CHAPTER  # verified 2026-09-07: 2019 init folders exist here
   init_hour: 18
   fetch_timeout: 600  # s: sftp wrapped in `timeout`; cuts tape-recall hangs well within the login limit
   fetch_retries: 2    # retry transient sftp failures before logging the timestep as failed

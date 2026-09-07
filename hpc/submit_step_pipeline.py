@@ -64,19 +64,28 @@ def grib_name(template: str, dt: datetime) -> str:
     return template.format(year=dt.year, date_compact=dt.strftime("%Y%m%d"), hour=dt.hour)
 
 
+# A genuine CHAPTER wrfout is ~9.1 GB; anything far below this is a tape stub or a
+# truncated transfer. Mirrors MIN_WRFOUT_BYTES in hpc/fetch_step.sh.
+MIN_WRFOUT_BYTES = 1073741824  # 1 GiB
+
 # Status-log tags that mean the timestep needs attention (usually just a re-run;
 # a true tape recall only if it persists). Old tape-named tags kept for historical
 # ledger entries written before the rename.
 PROBLEM_TAGS = {"MISSING_ON_LRZ", "FETCH_TIMEOUT", "UNREADABLE", "FETCH_ERROR",
                 "TAPE_TIMEOUT", "UNREADABLE_TAPE", "SKIP_OFFLINE"}
-CLEAR_TAGS = {"FETCH_OK", "CONVERT_SUBMITTED", "SKIP_GRIB_EXISTS"}
+CLEAR_TAGS = {"FETCH_OK", "CONVERT_SUBMITTED", "SKIP_GRIB_EXISTS", "SKIP_RAW_EXISTS"}
 
 
-def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log):
-    """Read-only consolidated status: per-timestep DONE / GRIB_MISSING / RECALL.
+def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
+              download_only=False, wrfout_dir=None, min_bytes=MIN_WRFOUT_BYTES):
+    """Read-only consolidated status: per-timestep DONE / MISSING / RECALL.
 
-    Cross-references the produced GRIBs with the driver status ledger so it is
+    Cross-references the produced artefacts with the driver status ledger so it is
     easy to see which timesteps still need a tape recall on LRZ.
+
+    In download-only mode there is no GRIB, so the artefact is the staged wrfout --
+    and it is checked by SIZE, not mere existence: with no convert downstream, that
+    size gate is the only thing separating an intact delivery from a truncated one.
     """
     start = datetime.strptime(start_dt, "%Y-%m-%dT%H")
     end = datetime.strptime(end_dt, "%Y-%m-%dT%H")
@@ -103,16 +112,34 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log):
                 elif status in CLEAR_TAGS:
                     problems.pop(dtv, None)
 
+    def produced(dt):
+        """(exists, path) for the artefact this mode is supposed to produce."""
+        if download_only:
+            p = os.path.join(wrfout_dir, dt.strftime("%Y-%m-%d"),
+                             f"wrfout_d02_{dt:%Y-%m-%d}_{dt:%H}:00:00")
+            try:
+                return os.path.getsize(p) >= min_bytes, p
+            except OSError:
+                return False, p
+        p = os.path.join(grib_dir, f"{dt.year:04d}", f"{dt.month:02d}",
+                         grib_name(grib_template, dt))
+        return os.path.exists(p), p
+
+    missing_label = "RAW_MISSING" if download_only else "GRIB_MISSING"
     done = missing = recall = 0
     recall_list = []
     print(f"# Step pipeline report  window {start_dt}..{end_dt}  ({direction})")
-    print(f"# grib_dir:   {grib_dir}")
+    if download_only:
+        print(f"# mode:       DOWNLOAD_ONLY (staged wrfout, >= {min_bytes} B)")
+        print(f"# wrfout_dir: {wrfout_dir}")
+    else:
+        print(f"# grib_dir:   {grib_dir}")
     print(f"# status_log: {status_log}")
     print(f"#  {'timestep':16}  {'state':18}  detail")
     for dt in hours:
         dts = dt.strftime("%Y-%m-%dT%H")
-        gp = os.path.join(grib_dir, f"{dt.year:04d}", f"{dt.month:02d}", grib_name(grib_template, dt))
-        if os.path.exists(gp):
+        ok, _ = produced(dt)
+        if ok:
             state, detail = "DONE", ""
             done += 1
         elif dts in problems:
@@ -121,7 +148,8 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log):
             recall += 1
             recall_list.append(dts)
         else:
-            state, detail = "GRIB_MISSING", "(no problem logged; fetch/convert pending or not attempted)"
+            state = missing_label
+            detail = "(no problem logged; fetch pending or not attempted)"
             missing += 1
         print(f"   {dts:16}  {state:18}  {detail[:80]}")
     print(f"\n# summary: {done} done, {missing} pending, {recall} need recall/attention")
@@ -144,6 +172,7 @@ def app(cfg: DictConfig):
         skip_list = os.path.abspath(skip_list)
         if not os.path.exists(skip_list):
             raise SystemExit(f"ERROR: paths.skip_list does not exist: {skip_list}")
+    download_only = bool(cfg.pipeline.get("download_only", False))
     dry_run = bool(cfg.get("dry_run", False))
     report = bool(cfg.get("report", False))
     direction = str(cfg.pipeline.direction)
@@ -158,20 +187,22 @@ def app(cfg: DictConfig):
 
     # Read-only consolidated report, no SLURM submission
     if report:
-        do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log)
+        do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
+                  download_only=download_only, wrfout_dir=wrfout_dir)
         return
 
     # backward walks from the NEWEST edge; forward from the OLDEST edge
     current_dt = end_dt if direction == "backward" else start_dt
 
     # Create directories
-    for d in [wrfout_dir, grib_dir, log_dir]:
+    for d in ([wrfout_dir, log_dir] if download_only else [wrfout_dir, grib_dir, log_dir]):
         os.makedirs(d, exist_ok=True)
 
     hpc_dir = os.path.join(project_dir, "hpc")
     driver_script = os.path.join(hpc_dir, "fetch_step.sh")
     convert_script = os.path.join(hpc_dir, "convert_step.sh")
-    driver_log = os.path.join(log_dir, "fetch_step_driver.log")
+    driver_log = cfg.paths.get("driver_log") or os.path.join(log_dir, "fetch_step_driver.log")
+    stop_flag = cfg.paths.get("stop_flag") or os.path.join(log_dir, "fetch_step.stop")
 
     # Convert runs on dcgp_usr_prod and must charge the DCGP-budget association.
     convert_account = cfg.slurm.step_convert_account or cfg.slurm.account or ""
@@ -208,6 +239,9 @@ def app(cfg: DictConfig):
         "CONVERT_WALLTIME": cfg.slurm.step_convert_walltime,
         "CONVERT_MEM": cfg.slurm.step_convert_mem,
         "CONVERT_ACCOUNT": convert_account,
+        "STOP_FLAG": stop_flag,
+        "MIN_WRFOUT_BYTES": str(MIN_WRFOUT_BYTES),
+        "DOWNLOAD_ONLY": "1" if download_only else "0",
         "DRY_RUN": "1" if dry_run else "0",
     }
     run_env = {**os.environ, **driver_env}
@@ -250,8 +284,13 @@ def app(cfg: DictConfig):
         print(f"Skip-list:     {skip_list}")
     print(f"Driver log:    {driver_log}")
     print(f"Status ledger: {status_log}")
-    print(f"Converts:      squeue -u $USER   (dcgp_usr_prod, account {convert_account})")
-    print("Stop the chain with:  pkill -f hpc/fetch_step.sh")
+    if download_only:
+        print(f"Mode:          DOWNLOAD_ONLY - no convert, wrfout kept in {wrfout_dir}")
+    else:
+        print(f"Converts:      squeue -u $USER   (dcgp_usr_prod, account {convert_account})")
+    # The stop flag is the per-chain control and works from any login node; pkill only
+    # reaches the node the chain happens to live on, and hits every chain at once.
+    print(f"Stop the chain with:  touch {stop_flag}    (rm it to resume; the run is re-entrant)")
 
 
 if __name__ == "__main__":
