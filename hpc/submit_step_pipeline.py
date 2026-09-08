@@ -17,6 +17,7 @@ Usage:
 
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -270,8 +271,22 @@ def app(cfg: DictConfig):
     # the datamover, sbatch's converts to dcgp_usr_prod, and respawns itself.
     os.makedirs(log_dir, exist_ok=True)
     logf = open(driver_log, "ab")
+    # Respawn from a SNAPSHOT of the driver, not from the repo copy. The chain
+    # re-execs the script from disk every ~18 min, so editing hpc/fetch_step.sh while
+    # a chain is live swaps its code underneath it -- and a non-atomic rewrite caught
+    # mid-respawn kills the chain outright (that is exactly how the 2024 window died
+    # on 2026-09-07, after 22 files). The snapshot makes a live chain immune to edits.
+    snapshot = os.path.join(
+        log_dir, f".driver_{os.path.basename(driver_log).removesuffix('.log')}_"
+                 f"{datetime.now():%Y%m%d%H%M%S}.sh")
+    tmp = snapshot + ".tmp"
+    shutil.copy2(driver_script, tmp)
+    os.replace(tmp, snapshot)          # atomic: a respawn never sees a partial file
+    run_env["DRIVER_SCRIPT"] = snapshot
+    print(f"Driver snapshot: {snapshot}")
+
     proc = subprocess.Popen(
-        ["bash", driver_script],
+        ["bash", snapshot],
         env=run_env, cwd=project_dir,
         stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         start_new_session=True,

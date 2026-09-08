@@ -285,6 +285,16 @@ respawn() {
         echo "STOP flag present (${STOP_FLAG}); not respawning. Remove it and re-launch to resume."
         return 0
     fi
+    # The chain re-execs the driver FROM DISK on every respawn, so a script edited
+    # mid-run -- or caught half-written by a non-atomic rewrite -- kills the chain
+    # silently (observed 2026-09-07: a doc edit landed during a respawn and the whole
+    # 2024 window stopped after 22 files). The launcher now respawns from a snapshot,
+    # but validate anyway and leave a ledger entry instead of dying without a trace.
+    if ! bash -n "${DRIVER_SCRIPT}" 2>/dev/null; then
+        echo "FATAL: ${DRIVER_SCRIPT} is unparsable; not respawning."
+        log_status "DRIVER@$(hostname)" "RESPAWN_FAILED" "driver script unparsable (edited mid-run?); re-launch the window, it is re-entrant"
+        return 1
+    fi
     if [ "${DRY_RUN}" = "1" ]; then
         echo "[DRY] setsid bash ${DRIVER_SCRIPT}   (CURRENT_DT=${next_dt}, DOWNLOAD_ONLY=${DOWNLOAD_ONLY})"
     else
