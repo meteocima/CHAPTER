@@ -82,6 +82,16 @@ def rewrite(path, ref_m):
     """Rewrite path with tp := tp - ref_m (ref_m=None -> zeros) and the marker.
     Returns (min_before_clip, mean_after)."""
     tmp = path + '.fixtmp'
+    try:
+        stats = _rewrite_to(path, tmp, ref_m)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return stats
+
+
+def _rewrite_to(path, tmp, ref_m):
     n_in = n_tp = 0
     stats = None
     with open(path, 'rb') as fin, open(tmp, 'wb') as fout:
@@ -110,22 +120,17 @@ def rewrite(path, ref_m):
                 codes_release(gid)
         fout.flush()
         os.fsync(fout.fileno())
-    try:
-        if n_tp != 1:
-            raise ValueError(f"expected 1 tp message, found {n_tp}")
-        with open(tmp, 'rb') as fh:
-            n_out = codes_count_in_file(fh)
-        if n_out != n_in:
-            raise ValueError(f"message count {n_out} != {n_in}")
-        _, gp, _ = read_tp(tmp)
-        if gp != MARK:
-            raise ValueError('marker not written')
-        shutil.copymode(path, tmp)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
+    if n_tp != 1:
+        raise ValueError(f"expected 1 tp message, found {n_tp}")
+    with open(tmp, 'rb') as fh:
+        n_out = codes_count_in_file(fh)
+    if n_out != n_in:
+        raise ValueError(f"message count {n_out} != {n_in}")
+    _, gp, _ = read_tp(tmp)
+    if gp != MARK:
+        raise ValueError('marker not written')
+    shutil.copymode(path, tmp)
+    os.replace(tmp, path)
     return stats
 
 
@@ -198,11 +203,16 @@ def fix_day(day, files, ref_dir, ledger, dry_run):
                              'valid_time': f"{date:%Y-%m-%d}_00:00:00"})
         log(ledger, sidecar, 'REF_WRITTEN', f"from {ref_src}")
 
-    # 3. hours 01..23 first, 00Z last; never zero 00Z if another hour failed
+    # 3. hours 01..23 first, 00Z last. Zero 00Z only if the reference was validated
+    # by at least one other hour of the day (fixed now or earlier) or there is no
+    # other hour: a failing hour among good ones is a broken file (e.g. 2024-12-29T18,
+    # a partly all-zero source), not a wrong reference. The sidecar keeps the
+    # reference either way.
     failed = False
+    validated = any(marks[h] for h in files if h != 0)
     for h in sorted(x for x in todo if x != 0) + ([0] if 0 in todo else []):
-        if h == 0 and failed:
-            log(ledger, files[h], 'ERROR', 'not zeroed: another hour of this day failed')
+        if h == 0 and failed and not validated:
+            log(ledger, files[h], 'ERROR', 'not zeroed: no other hour of this day matched the reference')
             out['ERROR'] += 1
             continue
         t0 = time.time()
@@ -211,6 +221,7 @@ def fix_day(day, files, ref_dir, ledger, dry_run):
             log(ledger, files[h], 'FIXED',
                 f"mean_tp={mean * 1000:.4f}mm min_raw={vmin:.2e}m {time.time() - t0:.1f}s")
             out['FIXED'] += 1
+            validated = validated or h != 0
         except Exception as e:  # noqa: BLE001
             failed = True
             log(ledger, files[h], 'ERROR', str(e))
