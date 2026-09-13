@@ -63,15 +63,9 @@ supermuc-get <remote_path> <local_path>    # rsync download via SSH socket
 
 ## Testing
 
-```bash
-python -m pytest test/utests.py -v       # main test suite
-python test/comp_utest.py                # computation tests
-python test/test_proj_params.py          # projection parameter tests
-python test/test_omp.py                  # OpenMP tests
-python test/test_units.py                # unit conversion tests
-```
-
-No CI/CD pipeline is configured. No linter configuration exists.
+There is no `test/` directory in this repo (the test commands of upstream wrf-python do not apply).
+Changes are verified by running the converter on a real wrfout with `--debug-vars` (e.g. `RAINNC`, ~5 s)
+into a scratch output. No CI/CD pipeline is configured. No linter configuration exists.
 
 ## Architecture
 
@@ -85,6 +79,7 @@ No CI/CD pipeline is configured. No linter configuration exists.
 - **`src/wrf/`** - Custom wrf-python (v1.4.2) with decorator-based metadata attachment and LRU computation caching. Diagnostic generators are in `g_*.py` files (wind, pressure, cape, etc.)
 - **`fortran/`** - Core computation kernels (vertical interpolation, CAPE, humidity, PV). OpenMP parallelization generated from `ompgen.F90.template`
 - **`convert_to_pressure_levels.py`** - Main conversion script: reads WRF NetCDF, computes diagnostics, encodes GRIB1 with projection metadata. Accepts `--input`/`--output` CLI args.
+- **`accum_ref.py`** - 00Z reference sidecars for accumulated fields (tp referred to 00Z of the same day); `python accum_ref.py extract <wrfout_00Z> <ref_dir>`
 - **`wrf_era5_comparison.py`** - WRF-to-ECMWF variable mapping and paramId definitions (imported by conversion scripts)
 - **`wrf_anemoi_recipe.yaml`** - Anemoi dataset recipe (input patterns, date ranges, compression settings)
 - **`conf/pipeline.yaml`** - Hydra configuration for the HPC pipeline (date range, paths, SuperMUC remote config, SLURM settings, GRIB naming template)
@@ -95,8 +90,9 @@ No CI/CD pipeline is configured. No linter configuration exists.
   - `orchestrator.sh` - SLURM wrapper for submit_pipeline.py in worker mode
   - `submit_step_pipeline.py` - Launcher for the step-by-step (hourly window) pipeline. Submits one recursive driver job; supports `dry_run=true` for a no-SLURM/no-network preview
   - `fetch_step.sh` - Recursive driver (lrd_all_serial). Fetches each timestep via the CINECA datamover (`ssh -xT data.leonardo.cineca.it "sftp -i <key> -B 262144 -R 256 -p datarelay@rdmtests.srv.lrz.de:<remote> <local>/"`, with `timeout`+retries and a NetCDF readability check), submits a convert job per timestep, then resubmits itself for the next batch until the window edge (backward by default). Writes the per-timestep status ledger; re-entrant (skips timesteps whose GRIB exists); logs and skips missing/on-tape files. With `pipeline.download_only=true` it stops after the fetch: no convert is submitted and the wrfout is **kept** (for staging raw files to hand to someone else)
-  - `convert_step.sh` - Single-timestep convert job (dcgp_usr_prod), non-array variant of `convert_day.sh`. **Deletes its input wrfout on success** (line 77) — which is why download-only mode must never submit it, and why staged files belong in their own directory
+  - `convert_step.sh` - Single-timestep convert job (dcgp_usr_prod), non-array variant of `convert_day.sh`. **Deletes its input wrfout on success** — which is why download-only mode must never submit it, and why staged files belong in their own directory. It never deletes a 00Z wrfout whose `accum_ref` sidecar is missing
   - `lrz/` - Bash-only helpers to run **on LRZ** (no python env available there): `chapter_scan.sh` classifies a date window into ONLINE / OFFLINE (on tape) / ASSENTE via `mmlsattr`, `chapter_recall.sh` submits the `dsacli` stage job for the OFFLINE ones (dry-run unless `--run`), `chapter_common.sh` holds the shared date/path helpers. Dates accept `YYYY-MM-DD`, `DD/MM/YYYY`, `DD-MM-YYYY`, `DD.MM.YYYY`
+  - `fix_tp_accum.py` / `fix_tp_accum.sh` - One-off (idempotent) correction of GRIBs produced before commit 1eaffb8, whose tp was accumulated since run init: `tp(H) -= tp(00Z)` per day, 00Z zeroed last, only the tp message re-encoded, atomic per file, marker genproc=128, ledger `logs/fix_tp_accum_status.log`. Per-month SLURM array on dcgp_usr_prod. Days with no 00Z GRIB and no sidecar are `NO_REFERENCE`: re-run the step pipeline on that day's 00Z, then the fix
   - `dates.py` - Date-to-run-folder mapping (target date -> SuperMUC init folder with 6h spinoff). Handles different base paths for pre-2023 vs 2023+ data. Reused by both pipelines
 - **`functions_supermuc.sh`** - Shell helper functions (`supermuc-put`, `supermuc-get`) for rsync transfers via SSH control socket
 
@@ -129,4 +125,6 @@ Per day: orchestrator submits fetch job (lrd_all_serial, rsync 24 wrfout) -> con
 - Mercator projection (MAP_PROJ=3), grid 1353x1641 at 3km resolution
 - Ocean masking uses LANDMASK field for SST/sea-ice distinction
 - Unit conversions required: geopotential (m -> m^2/s^2), radiation, precipitation
+- **Accumulated fields are referred to 00Z of the same day.** WRF accumulates from run init (18Z of the previous day, 6 h spinup), so `tp(H) = (RAINNC(H) - RAINNC(00Z same day, same run)) / 1000`, zero at 00Z; same rule for ACSWDNB/ACLWDNB/ACHFX/ACLHF if re-enabled (`accum_ref.ACCUMULATED_VARS`). RAINC is identically 0 (CU_PHYSICS=0), so tp = RAINNC is complete; no bucket reset (no I_RAINNC). Corrected tp messages carry `generatingProcessIdentifier=128` (127 = old, run-init-referred); GRIB time keys stay instant at dataTime=H
+- **00Z reference sidecar** (`accum_ref.py`): `<work_dir>/accum_ref/YYYY/MM/accum_ref_YYYYMMDD.npz`, native WRF units, written atomically by the converter for 00Z input, by `fetch_step.sh` `ensure_ref` (which fetches the 00Z first when needed — in backward order it would arrive last) and by `fix_tp_accum.py` (from the old 00Z GRIB). Invariant: the 00Z wrfout is never deleted without its sidecar. A convert with no reference fails loudly (no GRIB) rather than writing run-init-referred tp
 - Derived variables: specific humidity from mixing ratio, TCW, skin temperature, slope of orography
