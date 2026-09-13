@@ -24,6 +24,9 @@
 #         ssh -xT <datamover> "sftp -i <key> <opts> <relay>:<remote> <local>/"
 #      wrapped in `timeout` (cuts tape-recall hangs) with a few retries
 #   3. checks the file is a readable NetCDF (catches tape stubs / truncation)
+#   3b. (convert mode, hour != 00) makes sure the day's 00Z reference sidecar exists
+#      (accum_ref.py; tp is referred to 00Z of the same day), fetching the 00Z wrfout
+#      first if needed -- in backward order 00Z would otherwise arrive last
 #   4. submits a convert_step.sh job (dcgp_usr_prod) for that timestep (async)
 #      -- UNLESS DOWNLOAD_ONLY=1, in which case it stops at step 3 and KEEPS the
 #      wrfout (convert_step.sh deletes it on success), for staging raw files.
@@ -37,7 +40,7 @@
 #   DRIVER_MAX_SECONDS             - wall-time budget per process before re-spawning
 #   FETCH_PARALLEL                 - concurrent sftp transfers
 #   FETCH_TIMEOUT, FETCH_RETRIES   - per-sftp timeout (s) and retry count
-#   WRFOUT_DIR, GRIB_DIR, GRIB_TEMPLATE, PROJECT_DIR
+#   WRFOUT_DIR, GRIB_DIR, GRIB_TEMPLATE, PROJECT_DIR, ACCUM_REF_DIR
 #   DATAMOVER_HOST, REMOTE_HOST, IDENTITY_FILE, SFTP_OPTS, BASE_2023, BASE_PRE2023, INIT_HOUR
 #   LOG_DIR, STATUS_LOG, DRIVER_LOG, DRIVER_SCRIPT, CONVERT_SCRIPT
 #   CONVERT_PARTITION, CONVERT_WALLTIME, CONVERT_MEM, CONVERT_ACCOUNT
@@ -58,6 +61,7 @@ BATCH_SIZE="${BATCH_SIZE:-24}"
 DRIVER_MAX_SECONDS="${DRIVER_MAX_SECONDS:-1080}"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-600}"
 FETCH_RETRIES="${FETCH_RETRIES:-2}"
+ACCUM_REF_DIR="${ACCUM_REF_DIR:-$(dirname "${GRIB_DIR%/}")/accum_ref}"
 IDENTITY_FILE="${IDENTITY_FILE:-}"
 SFTP_OPTS="${SFTP_OPTS:--B 262144 -R 256 -p}"
 STATUS_LOG="${STATUS_LOG:-${LOG_DIR}/step_pipeline_status.log}"
@@ -156,7 +160,7 @@ submit_convert() {
     local d="$1" h="$2" dcompact local_dir convert_env
     dcompact="${d//-/}"
     local_dir="${WRFOUT_DIR}/${d}"
-    convert_env="TARGET_DATE=${d},HOUR=${h},WRFOUT_DIR=${local_dir},GRIB_DIR=${GRIB_DIR},PROJECT_DIR=${PROJECT_DIR},GRIB_TEMPLATE=${GRIB_TEMPLATE}"
+    convert_env="TARGET_DATE=${d},HOUR=${h},WRFOUT_DIR=${local_dir},GRIB_DIR=${GRIB_DIR},PROJECT_DIR=${PROJECT_DIR},GRIB_TEMPLATE=${GRIB_TEMPLATE},ACCUM_REF_DIR=${ACCUM_REF_DIR}"
 
     local acct_args=()
     [ -n "${CONVERT_ACCOUNT:-}" ] && acct_args=(--account "${CONVERT_ACCOUNT}")
@@ -178,9 +182,9 @@ submit_convert() {
     fi
 }
 
-# Fetch one timestep via the datamover, validate it, then submit its convert job.
-# Records the outcome in STATUS_LOG with a grep-able tag; never aborts the driver.
-process_one() {
+# Fetch one timestep via the datamover (unless already local) and validate it.
+# Failures are logged in STATUS_LOG with a grep-able tag; returns 1 on failure.
+fetch_wrfout() {
     local d="$1" h="$2"
     local dt="${d}T${h}"
     local local_dir remote fname dest
@@ -192,11 +196,6 @@ process_one() {
 
     if [ "${DRY_RUN}" = "1" ]; then
         echo "  [DRY] ssh -xT ${DATAMOVER_HOST} \"$(fetch_cmd "$remote" "$local_dir")\""
-        log_status "$dt" "FETCH_OK" "(dry-run)"
-        if [ "${DOWNLOAD_ONLY}" != "1" ]; then
-            submit_convert "$d" "$h"
-            log_status "$dt" "CONVERT_SUBMITTED" "(dry-run)"
-        fi
         return 0
     fi
 
@@ -266,6 +265,69 @@ process_one() {
         timeout 30 rm -f "$dest" 2>/dev/null || true
         return 1
     fi
+}
+
+# Path of the day's 00Z reference sidecar (see accum_ref.py).
+ref_sidecar() {
+    local d="$1"
+    echo "${ACCUM_REF_DIR}/${d:0:4}/${d:5:2}/accum_ref_${d//-/}.npz"
+}
+
+# Make sure the day's 00Z reference sidecar exists before converting a non-00Z hour:
+# every convert refers accumulated fields (tp) to 00Z of the same day. Runs in the
+# FOREGROUND of the main loop, so parallel workers never fetch the 00Z twice.
+#   sidecar present              -> ok
+#   00Z wrfout local             -> extract the sidecar from it
+#   otherwise                    -> fetch the 00Z wrfout, extract; if its GRIB already
+#                                   exists the wrfout was needed only as reference and is
+#                                   removed, else it stays for the 00Z convert to use.
+# Returns 1 (logged REF_UNAVAILABLE) when the reference cannot be obtained.
+ensure_ref() {
+    local d="$1" h="$2"
+    local ref w00 fetched=0
+    ref="$(ref_sidecar "$d")"
+    [ -s "$ref" ] && return 0
+    w00="${WRFOUT_DIR}/${d}/wrfout_d02_${d}_00:00:00"
+    if [ "${DRY_RUN}" = "1" ]; then
+        echo "  [DRY] ensure 00Z reference ${ref} (from ${w00}, fetching it if absent)"
+        return 0
+    fi
+    if [ -n "${SKIP_SET[${d}T00]:-}" ]; then
+        log_status "${d}T${h}" "REF_UNAVAILABLE" "00Z of ${d} is on the skip-list; recall it, then re-run"
+        return 1
+    fi
+    if ! { [ -f "$w00" ] && [ "$(stat -c%s "$w00" 2>/dev/null || echo 0)" -ge "$MIN_BYTES" ]; }; then
+        echo "  [${d}T${h}] 00Z reference missing: fetching ${d}T00 first."
+        if ! fetch_wrfout "$d" "00"; then
+            log_status "${d}T${h}" "REF_UNAVAILABLE" "could not fetch the 00Z wrfout of ${d} (see its ledger entry)"
+            return 1
+        fi
+        fetched=1
+    fi
+    if ! ( cd "$PROJECT_DIR" && uv run python accum_ref.py extract "$w00" "$ACCUM_REF_DIR" ); then
+        log_status "${d}T${h}" "REF_UNAVAILABLE" "accum_ref.py extract failed on ${w00}"
+        return 1
+    fi
+    if [ "$fetched" = "1" ] && [ -f "$(grib_path "$d" "00")" ]; then
+        timeout 60 rm -f "$w00" 2>/dev/null || true
+    fi
+    log_status "${d}T00" "REF_OK" "$ref"
+}
+
+# Fetch one timestep, then submit its convert job. Never aborts the driver.
+process_one() {
+    local d="$1" h="$2"
+    local dt="${d}T${h}" size
+    fetch_wrfout "$d" "$h" || return 1
+    if [ "${DRY_RUN}" = "1" ]; then
+        log_status "$dt" "FETCH_OK" "(dry-run)"
+        if [ "${DOWNLOAD_ONLY}" != "1" ]; then
+            submit_convert "$d" "$h"
+            log_status "$dt" "CONVERT_SUBMITTED" "(dry-run)"
+        fi
+        return 0
+    fi
+    size=$(stat -c%s "${WRFOUT_DIR}/${d}/wrfout_d02_${d}_${h}:00:00" 2>/dev/null || echo 0)
 
     log_status "$dt" "FETCH_OK" "size=${size}B"
     if [ "${DOWNLOAD_ONLY}" = "1" ]; then
@@ -397,6 +459,8 @@ while [ "$processed" -lt "$BATCH_SIZE" ] && within_window "$CUR_EPOCH"; do
             *)               echo "  [${dt}] GRIB already exists, skipping." ;;
         esac
         log_status "$dt" "$done_tag" ""
+    elif [ "${DOWNLOAD_ONLY}" != "1" ] && [ "$h" != "00" ] && ! ensure_ref "$d" "$h"; then
+        echo "  WARN [${dt}] 00Z reference unavailable, skipping (REF_UNAVAILABLE)."
     elif [ "${DRY_RUN}" = "1" ] || [ "${FETCH_PARALLEL}" -le 1 ]; then
         process_one "$d" "$h" || true
     else

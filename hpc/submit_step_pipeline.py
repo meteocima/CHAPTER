@@ -73,7 +73,7 @@ MIN_WRFOUT_BYTES = 1073741824  # 1 GiB
 # a true tape recall only if it persists). Old tape-named tags kept for historical
 # ledger entries written before the rename.
 PROBLEM_TAGS = {"MISSING_ON_LRZ", "FETCH_TIMEOUT", "UNREADABLE", "FETCH_ERROR",
-                "TAPE_TIMEOUT", "UNREADABLE_TAPE", "SKIP_OFFLINE"}
+                "TAPE_TIMEOUT", "UNREADABLE_TAPE", "SKIP_OFFLINE", "REF_UNAVAILABLE"}
 CLEAR_TAGS = {"FETCH_OK", "CONVERT_SUBMITTED", "SKIP_GRIB_EXISTS", "SKIP_RAW_EXISTS"}
 
 
@@ -165,6 +165,7 @@ def app(cfg: DictConfig):
     project_dir = os.path.abspath(cfg.paths.project_dir)
     wrfout_dir = cfg.paths.wrfout_dir
     grib_dir = cfg.paths.grib_dir
+    accum_ref_dir = cfg.paths.accum_ref_dir
     log_dir = cfg.paths.log_dir
     grib_template = cfg.grib.name_template
     status_log = cfg.paths.status_log
@@ -222,6 +223,7 @@ def app(cfg: DictConfig):
         "WRFOUT_DIR": wrfout_dir,
         "GRIB_DIR": grib_dir,
         "GRIB_TEMPLATE": grib_template,
+        "ACCUM_REF_DIR": accum_ref_dir,
         "PROJECT_DIR": project_dir,
         "DATAMOVER_HOST": cfg.datamover.host,
         "REMOTE_HOST": cfg.datamover.remote_host,

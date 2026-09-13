@@ -16,6 +16,8 @@
 #   GRIB_DIR      - output directory for GRIB files
 #   PROJECT_DIR   - path to CHAPTER repo (for convert_to_pressure_levels.py)
 #   GRIB_TEMPLATE - output filename template (Python .format() style)
+#   ACCUM_REF_DIR - (optional) 00Z reference sidecars for accumulated fields
+#                   (accum_ref.py); default: <GRIB_DIR>/../accum_ref
 
 set -euo pipefail
 
@@ -32,6 +34,9 @@ OUTPUT="${GRIB_DIR}/${YEAR}/${MONTH}/${GRIB_TEMPLATE}"
 # Expand template variables in output filename
 OUTPUT=$(echo "${OUTPUT}" | sed "s/{year}/${YEAR}/g; s/{date_compact}/${DATE_COMPACT}/g; s/{hour:02d}/${HOUR}/g")
 mkdir -p "$(dirname "${OUTPUT}")"
+# tp is referred to 00Z of the same day: the 00Z fields live in this sidecar
+ACCUM_REF_DIR="${ACCUM_REF_DIR:-$(dirname "${GRIB_DIR%/}")/accum_ref}"
+ACCUM_REF="${ACCUM_REF_DIR}/${YEAR}/${MONTH}/accum_ref_${DATE_COMPACT}.npz"
 TMPOUT="${OUTPUT}.tmp"
 
 # Clean up partial output on failure
@@ -67,12 +72,20 @@ export LD_LIBRARY_PATH="$GCC12_RT:$ECCODES_LIB:${LD_LIBRARY_PATH:-}"
 
 uv run python convert_to_pressure_levels.py \
     --input "${INPUT}" \
-    --output "${TMPOUT}"
+    --output "${TMPOUT}" \
+    --accum-ref-dir "${ACCUM_REF_DIR}"
 
 # Atomic rename on success
 mv "${TMPOUT}" "${OUTPUT}"
 
 echo ""
+# Convert jobs of the same day run independently and in any order, and every
+# non-00Z hour needs the 00Z fields: never delete the 00Z wrfout unless its
+# sidecar exists (the converter writes it when the input is 00Z).
+if [ "${HOUR}" = "00" ] && [ ! -s "${ACCUM_REF}" ]; then
+    echo "ERROR: 00Z reference sidecar missing (${ACCUM_REF}); keeping ${INPUT}"
+    exit 1
+fi
 echo "Conversion successful. Cleaning up wrfout..."
 timeout 60 rm -f "${INPUT}"
 echo "Deleted: ${INPUT}"

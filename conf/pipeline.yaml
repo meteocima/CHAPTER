@@ -40,6 +40,9 @@ paths:
   work_dir: /leonardo_work/AIFPT_AILAMIT/CHAPTER
   wrfout_dir: ${paths.work_dir}/wrfout
   grib_dir: ${paths.work_dir}/grib
+  # 00Z reference sidecars for accumulated fields (tp is referred to 00Z of the same day;
+  # see accum_ref.py). Shared by every chain: the 00Z wrfout is never deleted without it.
+  accum_ref_dir: ${paths.work_dir}/accum_ref
   log_dir: ${paths.work_dir}/logs
   status_log: ${paths.log_dir}/step_pipeline_status.log  # append-only step ledger (driver-written)
   # Per-chain files: override all three (with status_log) when running a second
