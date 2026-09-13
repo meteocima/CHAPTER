@@ -228,8 +228,11 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
                 # Special conversion: RAINNC, RAINC (mm since run init) -> tp (m since 00Z)
                 elif var_name in ['RAINNC', 'RAINC']:
                     acc = (var_data.values - accum_00z[var_name]) / 1000.0  # mm -> m
-                    if np.nanmin(acc) < -1e-9:
+                    if np.nanmin(acc) < -1e-6:
                         print(f"  WARNING: {var_name} minus 00Z has negative values (min {np.nanmin(acc):.3e} m)")
+                    # A GRIB-sourced reference (hpc/fix_tp_accum.py) carries ~1e-8 m of
+                    # packing quantisation: clip only that, keep real negatives visible
+                    acc = np.where((acc < 0) & (acc > -1e-6), 0.0, acc)
                     output_vars[var_name] = acc
                     print(f"  {var_name} (2D, since 00Z, converted to m: {np.nanmin(acc):.6f}-{np.nanmax(acc):.6f} m)")
                 # Other accumulated fields (currently unmapped): refer to 00Z, native units
