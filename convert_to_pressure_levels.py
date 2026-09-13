@@ -20,6 +20,8 @@ from eccodes import codes_grib_new_from_samples, codes_set, codes_set_values, co
 
 # Import WRF -> ECMWF paramId mapping
 from wrf_era5_comparison import WRF_TO_ECMWF_PARAMID
+# Accumulated fields are referred to 00Z of the same day (see accum_ref.py)
+import accum_ref
 
 # Desired pressure levels (hPa)
 PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50]
@@ -35,10 +37,15 @@ def parse_args():
         "--debug-vars", nargs="*", default=[],
         help="Limit processing to these variables only (default: all)"
     )
+    parser.add_argument(
+        "--accum-ref-dir", default=None,
+        help="Directory of 00Z reference sidecars for accumulated fields (accum_ref.py). "
+             "Without it, the 00Z wrfout must sit next to --input"
+    )
     return parser.parse_args()
 
 
-def main(input_file, output_file, debug_vars=None):
+def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
     if debug_vars is None:
         debug_vars = []
 
@@ -120,6 +127,35 @@ def main(input_file, output_file, debug_vars=None):
             return 'south_north'
         return None
 
+    # ==================== 00Z REFERENCE FOR ACCUMULATED VARIABLES ====================
+    # WRF accumulates from run init (18Z of the previous day); CHAPTER stores
+    # accumulations referred to 00Z of the same day. Loaded here, outside the
+    # per-variable try/except below, so a missing reference aborts the conversion
+    # instead of silently writing run-init-referred values.
+    accum_vars = [v for v in accum_ref.ACCUMULATED_VARS
+                  if v in WRF_TO_ECMWF_PARAMID and v in ncfile.variables
+                  and (not debug_vars or v in debug_vars)]
+    accum_00z = {}
+    if accum_vars:
+        print("\n=== 00Z REFERENCE FOR ACCUMULATED VARIABLES ===")
+        if date_time.hour == 0:
+            # The input IS the reference: result is zero by construction. Materialise
+            # the sidecar now, before convert_step.sh deletes this wrfout.
+            own_fields, own_meta = accum_ref.extract_from_wrfout(input_file)
+            accum_00z = {v: own_fields[v] for v in accum_vars}
+            if accum_ref_dir:
+                sidecar = accum_ref.ref_path(accum_ref_dir, date_time)
+                if not os.path.isfile(sidecar):
+                    accum_ref.write_ref(sidecar, own_fields, own_meta)
+                    print(f"  wrote 00Z sidecar: {sidecar}")
+            print(f"  input is 00Z: {accum_vars} will be zero")
+        else:
+            accum_00z, src = accum_ref.get_reference(
+                input_file, date_time, accum_vars,
+                sim_start=getattr(ncfile, 'SIMULATION_START_DATE', None),
+                ref_dir=accum_ref_dir)
+            print(f"  {accum_vars} referred to 00Z from {src}")
+
     # ==================== PROCESSING NATIVE VARIABLES ====================
     print("\n=== PROCESSING WRF NATIVE VARIABLES ===")
     if debug_vars:
@@ -189,10 +225,17 @@ def main(input_file, output_file, debug_vars=None):
                     q2_mr = var_data.values
                     output_vars[var_name] = q2_mr / (1.0 + q2_mr)
                     print(f"  {var_name} (2D, mixing ratio -> specific humidity)")
-                # Special conversion: RAINNC, RAINC (mm) -> tp (m)
+                # Special conversion: RAINNC, RAINC (mm since run init) -> tp (m since 00Z)
                 elif var_name in ['RAINNC', 'RAINC']:
-                    output_vars[var_name] = var_data.values / 1000.0  # mm -> m
-                    print(f"  {var_name} (2D, converted to m: {var_data.values.min()/1000.0:.6f}-{var_data.values.max()/1000.0:.6f} m)")
+                    acc = (var_data.values - accum_00z[var_name]) / 1000.0  # mm -> m
+                    if np.nanmin(acc) < -1e-9:
+                        print(f"  WARNING: {var_name} minus 00Z has negative values (min {np.nanmin(acc):.3e} m)")
+                    output_vars[var_name] = acc
+                    print(f"  {var_name} (2D, since 00Z, converted to m: {np.nanmin(acc):.6f}-{np.nanmax(acc):.6f} m)")
+                # Other accumulated fields (currently unmapped): refer to 00Z, native units
+                elif var_name in accum_00z:
+                    output_vars[var_name] = var_data.values - accum_00z[var_name]
+                    print(f"  {var_name} (2D, accumulated since 00Z)")
                 else:
                     output_vars[var_name] = var_data.values
                     print(f"  {var_name} (2D, shape: {var_data.shape})")
@@ -565,6 +608,9 @@ def main(input_file, output_file, debug_vars=None):
                 # Parameter
                 codes_set(gid, 'table2Version', 128)
                 codes_set(gid, 'indicatorOfParameter', param_id)
+                if var_name in accum_00z:
+                    # Marker: accumulation referred to 00Z of the same day
+                    codes_set(gid, 'generatingProcessIdentifier', accum_ref.ACCUM_FROM_00Z_GENPROC)
 
                 # Data
                 data_slice = var_data
@@ -608,4 +654,5 @@ def main(input_file, output_file, debug_vars=None):
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.input, args.output, debug_vars=args.debug_vars)
+    main(args.input, args.output, debug_vars=args.debug_vars,
+         accum_ref_dir=args.accum_ref_dir)
