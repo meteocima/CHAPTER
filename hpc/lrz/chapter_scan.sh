@@ -10,10 +10,12 @@ source "$(dirname "$(readlink -f "$0")")/chapter_common.sh"
 usage() {
     cat <<'EOF'
 Uso: chapter_scan.sh -s <inizio> -e <fine> [-o <outdir>]
+     chapter_scan.sh -l <lista_path_wrfout> [-o <outdir>]
 
   -s, --start   data di inizio  (YYYY-MM-DD | DD/MM/YYYY | DD-MM-YYYY | DD.MM.YYYY)
   -e, --end     data di fine    (inclusa)
   -o, --outdir  cartella risultati (default: /dss/dsshome1/0B/di54coy/call_2019)
+  -l, --list    scansiona questi file (un path wrfout per riga) invece di una finestra
 
 Esempio:  ./chapter_scan.sh -s 17/06/2019 -e 06/09/2019
 EOF
@@ -26,7 +28,6 @@ parse_common_args "$@"
     exit 1
 }
 
-TAG="${START}_${END}"
 ALL="${OUTDIR}/scan_${TAG}_all.txt"
 OFF="${OUTDIR}/scan_${TAG}_offline.txt"     # <- e' gia' la stagelist per dsacli -l
 ABS="${OUTDIR}/scan_${TAG}_absent.txt"
@@ -34,9 +35,15 @@ ON="${OUTDIR}/scan_${TAG}_online.txt"
 REP="${OUTDIR}/scan_${TAG}_report.tsv"
 SUM="${OUTDIR}/scan_${TAG}_summary.txt"
 
-expand_window "$START" "$END" > "$ALL"
-TOT=$(wc -l < "$ALL")
-echo "Finestra ${START} .. ${END}  ->  ${TOT} timestep"
+if [ -n "$LIST" ] && [ -z "$START" ]; then
+    grep -v '^\s*\(#\|$\)' "$LIST" > "$ALL"
+    TOT=$(wc -l < "$ALL")
+    echo "Lista ${LIST}  ->  ${TOT} file"
+else
+    expand_window "$START" "$END" > "$ALL"
+    TOT=$(wc -l < "$ALL")
+    echo "Finestra ${START} .. ${END}  ->  ${TOT} timestep"
+fi
 echo "Scansione in corso (mmlsattr su ogni file, puo' richiedere qualche minuto)..."
 
 : > "$OFF"; : > "$ABS"; : > "$ON"
@@ -61,7 +68,7 @@ done < "$ALL"
 nOFF=$(wc -l < "$OFF"); nABS=$(wc -l < "$ABS"); nON=$(wc -l < "$ON")
 TB=$(awk -v n="$nOFF" -v g="$GB_PER_FILE" 'BEGIN{printf "%.2f", n*g/1000}')
 {
-    echo "CHAPTER scan  ${START} .. ${END}   ($(date -u +%FT%TZ))"
+    echo "CHAPTER scan  ${START:-lista} .. ${END:-${TAG}}   ($(date -u +%FT%TZ))"
     echo "totale timestep : ${TOT}"
     echo "ONLINE          : ${nON}    (gia' su disco, scaricabili subito)"
     echo "OFFLINE         : ${nOFF}   (su tape, ~${TB} TB -> chapter_recall.sh)"

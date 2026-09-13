@@ -25,7 +25,6 @@ EOF
 }
 
 parse_common_args "$@"
-TAG="${START}_${END}"
 
 # La stagelist e' l'elenco OFFLINE prodotto dallo scan: solo cio' che serve davvero.
 if [ -z "$LIST" ]; then

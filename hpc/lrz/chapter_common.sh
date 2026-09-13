@@ -78,9 +78,17 @@ parse_common_args() {
             *) echo "Opzione sconosciuta: $1" >&2; usage; exit 1 ;;
         esac
     done
-    if [ -z "$START" ] || [ -z "$END" ]; then
-        echo "ERRORE: servono -s <inizio> e -e <fine>." >&2; usage; exit 1
+    # Con -l la lista stessa definisce i file: -s/-e diventano facoltativi.
+    if [ -n "$LIST" ] && [ -z "$START" ] && [ -z "$END" ]; then
+        [ -f "$LIST" ] || { echo "ERRORE: lista inesistente: $LIST" >&2; exit 1; }
+        TAG="$(basename "$LIST" .txt)"
+        mkdir -p "$OUTDIR"
+        return 0
     fi
+    if [ -z "$START" ] || [ -z "$END" ]; then
+        echo "ERRORE: servono -s <inizio> e -e <fine> (oppure -l <lista>)." >&2; usage; exit 1
+    fi
+    TAG="${START}_${END}"
     if [ "$(date -u -d "$START" +%s)" -gt "$(date -u -d "$END" +%s)" ]; then
         echo "ERRORE: inizio ($START) successivo alla fine ($END)." >&2; exit 1
     fi
