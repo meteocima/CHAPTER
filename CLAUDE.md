@@ -118,7 +118,7 @@ Per day: orchestrator submits fetch job (lrd_all_serial, rsync 24 wrfout) -> con
 - **eccodes runtime:** the convert jobs must `module load eccodes/2.34.0--gcc--12.2.0` and set `LD_PRELOAD`/`LD_LIBRARY_PATH` to the gcc-12 runtime + eccodes lib64 (see `hpc/convert_step.sh`); the `grib_*` CLI tools are not on PATH by default and the python eccodes bindings fail to find the C lib without this env.
 - **Date math:** login node TZ is CEST; GNU `date -d "<date> <H>:00:00 +1 hour"` misparses (`+1` read as a timezone) → do all timestep arithmetic in **UTC via epoch seconds** (as `fetch_step.sh` does).
 - `lrd_all_serial` `/tmp` is **node-local** (login08/13), not shared with your login session — write job output to `/leonardo_work` or `$HOME`.
-- A CHAPTER wrfout is ~8.6 GB; one timestep converts to a ~935 MB GRIB (149 messages, 13 pressure levels) in ~7.5 min on 1 DCGP core.
+- A CHAPTER wrfout is ~8.6 GB; one timestep converts to a ~410 MB GRIB (149 messages, 13 pressure levels) in ~7.5 min on 1 DCGP core.
 
 ### Important Domain Details
 
