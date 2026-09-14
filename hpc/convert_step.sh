@@ -18,6 +18,7 @@
 #   GRIB_TEMPLATE - output filename template (Python .format() style)
 #   ACCUM_REF_DIR - (optional) 00Z reference sidecars for accumulated fields
 #                   (accum_ref.py); default: <GRIB_DIR>/../accum_ref
+#   KEEP_WRFOUT   - (optional) "1" to keep the input wrfout after a successful convert
 
 set -euo pipefail
 
@@ -85,6 +86,10 @@ echo ""
 if [ "${HOUR}" = "00" ] && [ ! -s "${ACCUM_REF}" ]; then
     echo "ERROR: 00Z reference sidecar missing (${ACCUM_REF}); keeping ${INPUT}"
     exit 1
+fi
+if [ "${KEEP_WRFOUT:-0}" = "1" ]; then
+    echo "Conversion successful. KEEP_WRFOUT=1: keeping ${INPUT}"
+    exit 0
 fi
 echo "Conversion successful. Cleaning up wrfout..."
 timeout 60 rm -f "${INPUT}"

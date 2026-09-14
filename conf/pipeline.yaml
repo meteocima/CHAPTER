@@ -34,6 +34,9 @@ pipeline:
   # downloaded wrfout is KEPT (convert_step.sh deletes it on success). Used to
   # stage raw files for someone else; pair it with a dedicated paths.wrfout_dir.
   download_only: false
+  # Convert but KEEP the input wrfout (convert_step.sh skips its rm). Used to convert
+  # staged files that must stay on disk. The 00Z sidecar invariant is unaffected.
+  keep_wrfout: false
 
 # Paths on Leonardo
 paths:
@@ -82,6 +85,9 @@ datamover:
 batch:
   size: 24           # upper bound on timesteps per driver process (time budget usually cuts first)
   fetch_parallel: 2  # concurrent scp through the datamover (keep low: shared login node + datamover)
+  # Queue gate (0 = off). >0: each batch starts only when the user has no conv_* job
+  # queued, and batch.size is capped to it. E.g. size=48 + 48 = two days at a time.
+  max_queued_converts: 0
 
 # SLURM settings
 slurm:

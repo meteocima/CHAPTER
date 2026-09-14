@@ -245,6 +245,8 @@ def app(cfg: DictConfig):
         "STOP_FLAG": stop_flag,
         "MIN_WRFOUT_BYTES": str(MIN_WRFOUT_BYTES),
         "DOWNLOAD_ONLY": "1" if download_only else "0",
+        "KEEP_WRFOUT": "1" if cfg.pipeline.get("keep_wrfout", False) else "0",
+        "MAX_QUEUED_CONVERTS": str(int(cfg.batch.get("max_queued_converts", 0))),
         "DRY_RUN": "1" if dry_run else "0",
     }
     run_env = {**os.environ, **driver_env}

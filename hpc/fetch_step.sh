@@ -45,7 +45,10 @@
 #   LOG_DIR, STATUS_LOG, DRIVER_LOG, DRIVER_SCRIPT, CONVERT_SCRIPT
 #   CONVERT_PARTITION, CONVERT_WALLTIME, CONVERT_MEM, CONVERT_ACCOUNT
 #   DOWNLOAD_ONLY                  - "1" to fetch only: no convert submitted, wrfout kept
-#   DRY_RUN                        - "1" to print commands instead of running them
+#   KEEP_WRFOUT                    - "1" to convert but keep the wrfout (passed to convert_step.sh)
+#   MAX_QUEUED_CONVERTS            - >0: start a batch only once the user has no conv_* job
+#                                    queued, so at most BATCH_SIZE (<= this) are ever queued
+#   DRY_RUN                       - "1" to print commands instead of running them
 
 set -euo pipefail
 
@@ -54,6 +57,11 @@ DRY_RUN="${DRY_RUN:-0}"
 # survives the respawn chain -- losing it mid-chain would silently start deleting
 # staged files (convert_step.sh removes its input on success).
 DOWNLOAD_ONLY="${DOWNLOAD_ONLY:-0}"; export DOWNLOAD_ONLY
+# Convert but keep the input wrfout (e.g. converting files staged for someone else).
+KEEP_WRFOUT="${KEEP_WRFOUT:-0}"; export KEEP_WRFOUT
+# Queue gate: CINECA frowns on hundreds of queued jobs. With a value > 0 each batch
+# waits until no conv_* job of this user is left in the queue before submitting.
+MAX_QUEUED_CONVERTS="${MAX_QUEUED_CONVERTS:-0}"
 DIRECTION="${DIRECTION:-backward}"
 INIT_HOUR=$(printf "%02d" "$((10#${INIT_HOUR:-18}))")
 FETCH_PARALLEL="${FETCH_PARALLEL:-2}"
@@ -160,7 +168,7 @@ submit_convert() {
     local d="$1" h="$2" dcompact local_dir convert_env
     dcompact="${d//-/}"
     local_dir="${WRFOUT_DIR}/${d}"
-    convert_env="TARGET_DATE=${d},HOUR=${h},WRFOUT_DIR=${local_dir},GRIB_DIR=${GRIB_DIR},PROJECT_DIR=${PROJECT_DIR},GRIB_TEMPLATE=${GRIB_TEMPLATE},ACCUM_REF_DIR=${ACCUM_REF_DIR}"
+    convert_env="TARGET_DATE=${d},HOUR=${h},WRFOUT_DIR=${local_dir},GRIB_DIR=${GRIB_DIR},PROJECT_DIR=${PROJECT_DIR},GRIB_TEMPLATE=${GRIB_TEMPLATE},ACCUM_REF_DIR=${ACCUM_REF_DIR},KEEP_WRFOUT=${KEEP_WRFOUT}"
 
     local acct_args=()
     [ -n "${CONVERT_ACCOUNT:-}" ] && acct_args=(--account "${CONVERT_ACCOUNT}")
@@ -360,7 +368,7 @@ respawn() {
     if [ "${DRY_RUN}" = "1" ]; then
         echo "[DRY] setsid bash ${DRIVER_SCRIPT}   (CURRENT_DT=${next_dt}, DOWNLOAD_ONLY=${DOWNLOAD_ONLY})"
     else
-        CURRENT_DT="${next_dt}" DOWNLOAD_ONLY="${DOWNLOAD_ONLY}" \
+        CURRENT_DT="${next_dt}" DOWNLOAD_ONLY="${DOWNLOAD_ONLY}" KEEP_WRFOUT="${KEEP_WRFOUT}" \
             setsid bash "${DRIVER_SCRIPT}" >> "${DRIVER_LOG}" 2>&1 < /dev/null &
         echo "Respawned driver (pid $!) for ${next_dt}."
     fi
@@ -379,7 +387,7 @@ echo "StatusLog: ${STATUS_LOG}"
 if [ "${DOWNLOAD_ONLY}" = "1" ]; then
     echo "Mode:      DOWNLOAD_ONLY (no convert, wrfout kept)"
 else
-    echo "Mode:      fetch + convert"
+    echo "Mode:      fetch + convert (keep wrfout: ${KEEP_WRFOUT}, queue gate: ${MAX_QUEUED_CONVERTS})"
 fi
 echo "RawDir:    ${WRFOUT_DIR}"
 echo "Dry run:   ${DRY_RUN}"
@@ -431,6 +439,21 @@ END_EPOCH=$(TZ=UTC date -d "${END_DT%T*} $((10#${END_DT#*T})):00:00" +%s)
 # A timestep is in scope if it lies within [oldest, newest], regardless of direction.
 within_window() { [ "$1" -ge "$START_EPOCH" ] && [ "$1" -le "$END_EPOCH" ]; }
 
+# Number of this user's convert jobs in the queue (pending + running). Prints
+# nothing and returns 1 when squeue fails, so the gate waits instead of guessing.
+queued_converts() {
+    local out
+    out=$(timeout 60 squeue -h -u "${USER}" -o %j 2>/dev/null) || return 1
+    printf '%s\n' "$out" | awk '/^conv_/ {n++} END {print n+0}'
+}
+
+GATED=0
+if [ "${MAX_QUEUED_CONVERTS}" -gt 0 ] && [ "${DOWNLOAD_ONLY}" != "1" ] && [ "${DRY_RUN}" != "1" ]; then
+    GATED=1
+    # A batch submits at most BATCH_SIZE converts into an empty queue.
+    [ "$BATCH_SIZE" -gt "$MAX_QUEUED_CONVERTS" ] && BATCH_SIZE="$MAX_QUEUED_CONVERTS"
+fi
+
 processed=0
 running=0
 budget_hit=0
@@ -439,6 +462,24 @@ while [ "$processed" -lt "$BATCH_SIZE" ] && within_window "$CUR_EPOCH"; do
         echo "Time budget (${DRIVER_MAX_SECONDS}s) reached; will respawn for the rest of the window."
         budget_hit=1
         break
+    fi
+
+    # Queue gate, once per batch: wait for the previous batch's converts to leave the
+    # queue. The budget check above still applies (CUR_EPOCH is not advanced).
+    if [ "$GATED" = "1" ] && [ "$processed" -eq 0 ]; then
+        if stop_requested; then
+            echo "STOP flag present (${STOP_FLAG}); stopping while waiting on the queue."
+            break
+        fi
+        if ! nq=$(queued_converts); then
+            echo "  [queue] squeue failed; waiting."
+            sleep 60; continue
+        fi
+        if [ "$nq" -gt 0 ]; then
+            echo "  [queue] ${nq} conv_* job(s) still queued; waiting before $(TZ=UTC date -d "@${CUR_EPOCH}" +%Y-%m-%dT%H) ($(date -u +%H:%M)Z)."
+            sleep 60; continue
+        fi
+        echo "  [queue] empty; submitting next batch of up to ${BATCH_SIZE}."
     fi
 
     d=$(TZ=UTC date -d "@${CUR_EPOCH}" +%Y-%m-%d)
