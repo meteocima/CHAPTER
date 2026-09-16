@@ -15,6 +15,8 @@
 #   1. wait until the project quota is below QUOTA_STOP_TB
 #   2. launch a DOWNLOAD-ONLY chain (no convert, wrfout kept) and wait for "Window complete"
 #   3. launch the CONVERT chain for that same phase and DO NOT wait for it
+# KEEP_WRFOUT=true (the default) keeps the staged wrfout after conversion; PHASES_ONLY
+# restricts the run to a subset of phase labels when resuming a stopped sequence.
 # At the end: wait for every convert chain, drain the queue, write the per-phase reports
 # and submit one check_grib_sanity job over all the affected months.
 #
@@ -42,6 +44,15 @@ PROJECT_QUOTA_ID=20148120        # lfs project id of /leonardo_work/AIFPT_AILAMI
 QUOTA_STOP_TB=85                 # hold new downloads above this
 SANITY_ACCOUNT=aifpt_ailamit_0
 SANITY_MONTHS="2024-01,2024-02,2024-03,2024-04,2024-05,2024-06,2024-09,2024-10"
+# Keep the staged wrfout after a successful convert. Default true: more variables may have
+# to be extracted from these years later, and re-fetching a wrfout costs 9 GB over the LRZ
+# relay. NB with KEEP=true nothing frees space, so a QUOTA_HOLD can no longer resolve
+# itself -- size the phases so the projected peak stays under QUOTA_STOP_TB.
+KEEP_WRFOUT="${KEEP_WRFOUT:-true}"
+# Restrict the run to these phase labels (space separated), e.g. to resume a stopped
+# sequence without re-downloading phases whose wrfout are already gone. Empty = all.
+PHASES_ONLY="${PHASES_ONLY:-}"
+export KEEP_WRFOUT PHASES_ONLY
 
 # label  start_date  end_date   (the small block first: it doubles as an end-to-end shakedown)
 PHASES=(
@@ -102,7 +113,13 @@ wait_for_quota() {
             log "QUOTA_OK | ${label}: ${tb} TB used (< ${QUOTA_STOP_TB} TB)"
             return 0
         fi
-        [ "$warned" -eq 0 ] && log "QUOTA_HOLD | ${label}: ${tb} TB used >= ${QUOTA_STOP_TB} TB; waiting for converts to free space"
+        if [ "$warned" -eq 0 ]; then
+            if [ "$KEEP_WRFOUT" = "true" ]; then
+                log "QUOTA_HOLD | ${label}: ${tb} TB used >= ${QUOTA_STOP_TB} TB and KEEP_WRFOUT=true, so nothing will free space on its own: move or delete data, or raise QUOTA_STOP_TB"
+            else
+                log "QUOTA_HOLD | ${label}: ${tb} TB used >= ${QUOTA_STOP_TB} TB; waiting for converts to free space"
+            fi
+        fi
         warned=1
         sleep "$POLL_SECONDS"
     done
@@ -120,10 +137,10 @@ dl_args() {
 
 cv_args() {
     local label="$1" start="$2" end="$3"
-    # keep_wrfout stays false: convert_step.sh deletes each wrfout once its GRIB is in place
-    # (and still refuses to delete a 00Z whose accum_ref sidecar is missing).
+    # KEEP_WRFOUT=false lets convert_step.sh delete each wrfout once its GRIB is in place
+    # (it still refuses to delete a 00Z whose accum_ref sidecar is missing); true keeps them.
     echo "window.start_date=${start} window.start_hour=0 window.end_date=${end} window.end_hour=23" \
-         "paths.wrfout_dir=${FILL_DIR}" \
+         "paths.wrfout_dir=${FILL_DIR} pipeline.keep_wrfout=${KEEP_WRFOUT}" \
          "batch.fetch_parallel=${FETCH_PARALLEL} batch.size=${MAX_QUEUED} batch.max_queued_converts=${MAX_QUEUED}" \
          "paths.status_log=${LOG_DIR}/fill2024_${label}_cv_status.log" \
          "paths.driver_log=${LOG_DIR}/fill2024_${label}_cv_driver.log" \
@@ -186,6 +203,10 @@ CV_PENDING=()   # "label start end offset" of the convert chains still to be wai
 for ph in "${PHASES[@]}"; do
     read -r label start end <<<"$ph"
     check_stop
+    if [ -n "$PHASES_ONLY" ] && ! printf '%s\n' $PHASES_ONLY | grep -qx "$label"; then
+        log "SKIP_PHASE | ${label}: not in PHASES_ONLY"
+        continue
+    fi
     wait_for_quota "$label"
 
     dl_log="${LOG_DIR}/fill2024_${label}_dl_driver.log"
