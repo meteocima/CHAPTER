@@ -1,11 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-Script to convert WRF files to pressure levels in GRIB1 format.
+"""Convert one hourly WRF wrfout to an ECMWF-compatible GRIB2 file.
 
 Usage:
     python convert_to_pressure_levels.py --input <wrfout_file> --output <grib_file>
-    python convert_to_pressure_levels.py --input <wrfout_file> --output <grib_file> --debug-vars T2 tk slor
+    python convert_to_pressure_levels.py --input <wrfout> --output <grib> --debug-vars T2 tk
+
+What is produced, and on which level, is entirely described by
+WRF_TO_ECMWF_PARAMID in wrf_era5_comparison.py: this module only knows how to
+compute each field and how to hand it to eccodes.
+
+GRIB2 rather than GRIB1: several of the required parameters (2r, tirf, mucape,
+mucin, wz) have no GRIB1 representation at all, and GRIB1 cannot declare the
+spherical earth WRF integrates on -- doing so removes a ~1.1 km geolocation
+error at the northern edge of the domain.
 """
 
 import argparse
@@ -16,646 +24,485 @@ import numpy as np
 from netCDF4 import Dataset
 import wrf
 import pandas as pd
-from eccodes import codes_grib_new_from_samples, codes_set, codes_set_values, codes_write, codes_release
+from eccodes import (codes_grib_new_from_samples, codes_set, codes_set_values,
+                     codes_write, codes_release)
 
-# Import WRF -> ECMWF paramId mapping
-from wrf_era5_comparison import WRF_TO_ECMWF_PARAMID
+from wrf_era5_comparison import WRF_TO_ECMWF_PARAMID, PRESSURE_LEVELS, EXPECTED_MESSAGES
 # Accumulated fields are referred to 00Z of the same day (see accum_ref.py)
 import accum_ref
 
-# Desired pressure levels (hPa)
-PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50]
+G = 9.80665                 # m/s^2, standard gravity (geopotential)
+WRF_EARTH_RADIUS = 6370000  # m, the sphere WRF integrates on
+MISSING = 9999.0            # GRIB missing-value sentinel, paired with a bitmap
+PACKING = 'grid_ccsds'      # lossless; ~same size as second-order, much faster
+
+# Multiplicative factor applied to a native field (after the 00Z subtraction,
+# where one applies) to reach the units its ECMWF parameter is defined in.
+UNIT_SCALE = {
+    'HGT': G,           # m -> m^2/s^2
+    'SNOW': 1e-3,       # kg/m^2 -> m of water equivalent
+    'CANWAT': 1e-3,     # kg/m^2 -> m of water equivalent
+    'VEGFRA': 1e-2,     # %      -> (0-1)
+    'RAINNC': 1e-3,     # mm     -> m
+    'SNOWNC': 1e-3,     # mm     -> m
+    'SFROFF': 1e-3,     # mm     -> m
+    'UDROFF': 1e-3,     # mm     -> m
+    'ACSNOM': 1e-3,     # kg/m^2 -> m of water equivalent
+}
+
+# Cloud bands, as fractions of surface pressure (ECMWF convention).
+CLOUD_BANDS = {'lcc': (1.00, 0.80), 'mcc': (0.80, 0.45), 'hcc': (0.45, 0.00)}
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Convert WRF wrfout to ECMWF-compatible GRIB1 format"
-    )
+        description="Convert a WRF wrfout to ECMWF-compatible GRIB2")
     parser.add_argument("--input", required=True, help="Path to wrfout NetCDF file")
-    parser.add_argument("--output", required=True, help="Output GRIB1 file path")
+    parser.add_argument("--output", required=True, help="Output GRIB2 file path")
     parser.add_argument(
         "--debug-vars", nargs="*", default=[],
-        help="Limit processing to these variables only (default: all)"
-    )
+        help="Limit processing to these registry keys only (default: all)")
     parser.add_argument(
         "--accum-ref-dir", default=None,
         help="Directory of 00Z reference sidecars for accumulated fields (accum_ref.py). "
-             "Without it, the 00Z wrfout must sit next to --input"
-    )
+             "Without it, the 00Z wrfout must sit next to --input")
     return parser.parse_args()
 
 
-def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
-    if debug_vars is None:
-        debug_vars = []
+# ============================================================================
+# GRIB2 writing
+# ============================================================================
 
-    pressure_levels = PRESSURE_LEVELS
+def _set_grid(gid, grid):
+    codes_set(gid, 'gridType', 'mercator')
+    # WRF integrates on a sphere of radius 6370 km. Declaring it explicitly
+    # brings the grid eccodes derives to within ~2 m of the WRF coordinates;
+    # with the default earth shape the northern edge is off by ~1.1 km.
+    codes_set(gid, 'shapeOfTheEarth', 1)
+    codes_set(gid, 'scaleFactorOfRadiusOfSphericalEarth', 0)
+    codes_set(gid, 'scaledValueOfRadiusOfSphericalEarth', WRF_EARTH_RADIUS)
+    codes_set(gid, 'Ni', grid['ni'])
+    codes_set(gid, 'Nj', grid['nj'])
+    codes_set(gid, 'latitudeOfFirstGridPointInDegrees', grid['lat0'])
+    codes_set(gid, 'longitudeOfFirstGridPointInDegrees', grid['lon0'])
+    codes_set(gid, 'latitudeOfLastGridPointInDegrees', grid['lat1'])
+    codes_set(gid, 'longitudeOfLastGridPointInDegrees', grid['lon1'])
+    codes_set(gid, 'LaDInDegrees', grid['truelat1'])
+    codes_set(gid, 'DiInMetres', grid['dx'])
+    codes_set(gid, 'DjInMetres', grid['dy'])
+    codes_set(gid, 'orientationOfTheGridInDegrees', 0.0)
+    # Row 0 of a WRF array is the southernmost one.
+    codes_set(gid, 'jScansPositively', 1)
+    codes_set(gid, 'iScansNegatively', 0)
+
+
+def _set_time(gid, info, valid):
+    """Instantaneous by default; statistically processed fields use template 8.
+
+    'accum' fields are accumulated from 00Z of the same day, so the reference
+    time is that 00Z and the step runs 0..H. 'max1h' fields (the 10 m wind
+    maximum, which WRF resets at every output) cover the preceding hour only.
+    Either way validityDate/validityTime resolve to this timestep.
+    """
+    step = info.get('stepType')
+    if step is None:
+        codes_set(gid, 'dataDate', int(valid.strftime('%Y%m%d')))
+        codes_set(gid, 'dataTime', int(valid.strftime('%H%M')))
+        codes_set(gid, 'startStep', 0)
+        codes_set(gid, 'endStep', 0)
+        return
+
+    if step == 'accum':
+        ref, end = valid.normalize(), valid.hour
+    elif step == 'max1h':
+        ref, end = valid - pd.Timedelta(hours=1), 1
+    else:
+        raise ValueError(f"unknown stepType {step!r}")
+
+    codes_set(gid, 'productDefinitionTemplateNumber', 8)
+    codes_set(gid, 'dataDate', int(ref.strftime('%Y%m%d')))
+    codes_set(gid, 'dataTime', int(ref.strftime('%H%M')))
+    codes_set(gid, 'stepUnits', 'h')
+    codes_set(gid, 'startStep', 0)
+    codes_set(gid, 'endStep', end)
+
+
+def write_message(fout, values, info, level, grid, valid):
+    """Write one 2D field as a single GRIB2 message."""
+    gid = codes_grib_new_from_samples('GRIB2')
+    try:
+        _set_time(gid, info, valid)
+        _set_grid(gid, grid)
+        # paramId first: it carries the level type the definition prescribes,
+        # which an explicit typeOfLevel then overrides where we want one.
+        codes_set(gid, 'paramId', info['paramId'])
+        if info['levelType'] is not None:
+            codes_set(gid, 'typeOfLevel', info['levelType'])
+            codes_set(gid, 'level', int(level))
+        if info.get('stepType') == 'accum':
+            # Marker kept from the GRIB1 schema: accumulation referred to 00Z.
+            codes_set(gid, 'generatingProcessIdentifier', accum_ref.ACCUM_FROM_00Z_GENPROC)
+
+        flat = np.asarray(values, dtype=np.float64).ravel()
+        if np.isnan(flat).any():
+            codes_set(gid, 'missingValue', MISSING)
+            codes_set(gid, 'bitmapPresent', 1)
+            flat = np.where(np.isnan(flat), MISSING, flat)
+        codes_set_values(gid, flat)
+        codes_set(gid, 'packingType', PACKING)
+        codes_write(gid, fout)
+    finally:
+        codes_release(gid)
+
+
+# ============================================================================
+# main
+# ============================================================================
+
+def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
+    debug_vars = debug_vars or []
+
+    def want(key):
+        """Is this registry key to be produced in this run?"""
+        return key in WRF_TO_ECMWF_PARAMID and (not debug_vars or key in debug_vars)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
-
     print(f"Opening file: {input_file}")
     ncfile = Dataset(input_file)
 
-    # Extract projection parameters from WRF file
-    print("\nExtracting WRF projection parameters...")
-    map_proj = ncfile.MAP_PROJ  # Should be 3=Mercator for CHAPTER
-    truelat1 = ncfile.TRUELAT1  # Latitude where DX/DY are exact
-    stand_lon = ncfile.STAND_LON  # Grid orientation
-    dx = ncfile.DX  # meters
-    dy = ncfile.DY  # meters
+    if ncfile.MAP_PROJ != 3:
+        raise ValueError(f"Expected Mercator (MAP_PROJ=3), got {ncfile.MAP_PROJ}")
 
-    print(f"  MAP_PROJ: {map_proj}")
-    print(f"  TRUELAT1: {truelat1}")
-    print(f"  STAND_LON: {stand_lon}")
-    print(f"  DX: {dx} m, DY: {dy} m")
+    lat_2d = wrf.getvar(ncfile, "lat").values
+    lon_2d = wrf.getvar(ncfile, "lon").values
+    grid = {
+        'nj': lat_2d.shape[0], 'ni': lat_2d.shape[1],
+        'lat0': float(lat_2d[0, 0]), 'lon0': float(lon_2d[0, 0]),
+        'lat1': float(lat_2d[-1, -1]), 'lon1': float(lon_2d[-1, -1]),
+        'truelat1': float(ncfile.TRUELAT1),
+        'dx': float(ncfile.DX), 'dy': float(ncfile.DY),
+    }
+    dx, dy = grid['dx'], grid['dy']
+    valid = pd.Timestamp(wrf.extract_times(ncfile, timeidx=wrf.ALL_TIMES)[0])
+    print(f"Grid {grid['ni']}x{grid['nj']}, timestep {valid}")
 
-    # Verify it's Mercator projection
-    if map_proj != 3:
-        raise ValueError(f"Expected Mercator projection (MAP_PROJ=3), got MAP_PROJ={map_proj}")
+    # Shared by every 3D diagnostic; read once instead of once per getvar call.
+    # Skipped when the run only asks for plain 2D fields, so that a --debug-vars
+    # check on a surface variable stays a few seconds instead of reading 2.6 GB.
+    flat_only = all(WRF_TO_ECMWF_PARAMID[k]['levelType'] in ('surface', 'heightAboveGround')
+                    and k in ncfile.variables
+                    for k in WRF_TO_ECMWF_PARAMID if want(k))
+    cache = {} if flat_only else wrf.extract_vars(
+        ncfile, 0, ('P', 'PB', 'PH', 'PHB', 'T', 'QVAPOR', 'PSFC', 'HGT'))
+    print(f"Shared cache: {'skipped (2D-only run)' if flat_only else sorted(cache)}")
 
-    grid_type = 'mercator'
-    print(f"  Grid type: {grid_type}")
+    def gv(name, **kwargs):
+        return wrf.getvar(ncfile, name, timeidx=0, cache=cache, **kwargs)
 
-    # Use generic GRIB1 template
-    grib_template_pl = 'GRIB1'
-    grib_template_sfc = 'GRIB1'
+    def to_levels(field):
+        """Interpolate a mass-point 3D field onto the pressure levels."""
+        return wrf.vinterp(ncfile, field=field, vert_coord="pressure",
+                           interp_levels=PRESSURE_LEVELS, extrapolate=True,
+                           timeidx=0, cache=cache).values
 
-    # Extract coordinates and time
-    times = wrf.extract_times(ncfile, timeidx=wrf.ALL_TIMES)
-    time_value = times[0]  # Use first timestep
-    lat = wrf.getvar(ncfile, "lat")
-    lon = wrf.getvar(ncfile, "lon")
-    lat_2d = lat.values  # (south_north, west_east)
-    lon_2d = lon.values  # (south_north, west_east)
+    out = {}
 
-    print(f"\nGrid dimensions: {lat_2d.shape}")
-    print(f"Timestep to process: {time_value}")
+    def emit(key, values, note=""):
+        out[key] = values
+        a = np.asarray(values, dtype=float)
+        finite = a[np.isfinite(a)]
+        rng = f"{finite.min():.4g}..{finite.max():.4g}" if finite.size else "all-missing"
+        print(f"  {key:10s} -> {WRF_TO_ECMWF_PARAMID[key]['shortName']:7s} {rng} {note}")
 
-    # Convert datetime64 to GRIB components
-    date_time = pd.Timestamp(time_value)
-    data_date = int(date_time.strftime('%Y%m%d'))
-    data_time = int(date_time.strftime('%H%M'))
+    # ---------------- land / ocean mask -------------------------------------
+    landmask = gv("LANDMASK").values
+    ocean = (landmask == 0)
 
-    # Output dictionary
-    output_vars = {}
-
-    # Read LANDMASK for land/ocean masking
-    print("\n=== READING LANDMASK ===")
-    try:
-        landmask = wrf.getvar(ncfile, "LANDMASK", timeidx=0).values  # 1=land, 0=water
-        ocean_mask = (landmask == 0)  # Mask for ocean
-        land_mask = (landmask == 1)   # Mask for land
-        print(f"LANDMASK loaded: {landmask.shape}")
-        print(f"  Ocean points: {ocean_mask.sum()} ({100*ocean_mask.sum()/ocean_mask.size:.1f}%)")
-        print(f"  Land points: {land_mask.sum()} ({100*land_mask.sum()/land_mask.size:.1f}%)")
-    except Exception as e:
-        print(f"Unable to load LANDMASK: {e}")
-        print("  Land/ocean masking NOT applied")
-        ocean_mask = None
-        land_mask = None
-
-    def is_staggered(var_name):
-        """Determine if a variable is staggered and in which dimension"""
-        if var_name not in ncfile.variables:
-            return None
-        dims = ncfile.variables[var_name].dimensions
-        if 'bottom_top_stag' in dims:
-            return 'vertical'
-        elif 'west_east_stag' in dims:
-            return 'west_east'
-        elif 'south_north_stag' in dims:
-            return 'south_north'
-        return None
-
-    # ==================== 00Z REFERENCE FOR ACCUMULATED VARIABLES ====================
-    # WRF accumulates from run init (18Z of the previous day); CHAPTER stores
-    # accumulations referred to 00Z of the same day. Loaded here, outside the
-    # per-variable try/except below, so a missing reference aborts the conversion
-    # instead of silently writing run-init-referred values.
-    accum_vars = [v for v in accum_ref.ACCUMULATED_VARS
-                  if v in WRF_TO_ECMWF_PARAMID and v in ncfile.variables
-                  and (not debug_vars or v in debug_vars)]
+    # ---------------- 00Z reference for accumulated fields ------------------
+    # Loaded outside any try/except: a missing reference must abort the run
+    # rather than silently produce run-init-referred accumulations.
+    accum_keys = [k for k, v in WRF_TO_ECMWF_PARAMID.items()
+                  if v.get('stepType') == 'accum' and (not debug_vars or k in debug_vars)]
+    # tirf and tsr are combinations, so ask for the native fields they need.
+    needed = set()
+    for k in accum_keys:
+        needed.update({'tirf': ('RAINNC', 'SNOWNC', 'GRAUPELNC'),
+                       'tsr': ('ACSWDNT', 'ACSWUPT')}.get(k, (k,)))
+    needed = sorted(n for n in needed if n in ncfile.variables)
     accum_00z = {}
-    if accum_vars:
-        print("\n=== 00Z REFERENCE FOR ACCUMULATED VARIABLES ===")
-        if date_time.hour == 0:
-            # The input IS the reference: result is zero by construction. Materialise
-            # the sidecar now, before convert_step.sh deletes this wrfout.
-            own_fields, own_meta = accum_ref.extract_from_wrfout(input_file)
-            accum_00z = {v: own_fields[v] for v in accum_vars}
+    if needed:
+        print("\n=== 00Z REFERENCE FOR ACCUMULATED FIELDS ===")
+        if valid.hour == 0:
+            fields, meta = accum_ref.extract_from_wrfout(input_file)
+            accum_00z = {v: fields[v] for v in needed}
             if accum_ref_dir:
-                sidecar = accum_ref.ref_path(accum_ref_dir, date_time)
+                sidecar = accum_ref.ref_path(accum_ref_dir, valid)
                 if not os.path.isfile(sidecar):
-                    accum_ref.write_ref(sidecar, own_fields, own_meta)
+                    accum_ref.write_ref(sidecar, fields, meta)
                     print(f"  wrote 00Z sidecar: {sidecar}")
-            print(f"  input is 00Z: {accum_vars} will be zero")
+            print(f"  input is 00Z: {needed} are zero by construction")
         else:
             accum_00z, src = accum_ref.get_reference(
-                input_file, date_time, accum_vars,
+                input_file, valid, needed,
                 sim_start=getattr(ncfile, 'SIMULATION_START_DATE', None),
                 ref_dir=accum_ref_dir)
-            print(f"  {accum_vars} referred to 00Z from {src}")
+            print(f"  {needed} referred to 00Z from {src}")
 
-    # ==================== PROCESSING NATIVE VARIABLES ====================
-    print("\n=== PROCESSING WRF NATIVE VARIABLES ===")
-    if debug_vars:
-        print(f"DEBUG MODE: processing limited to {debug_vars}")
+    def since_00z(name):
+        """Native accumulated field, referred to 00Z of the same day."""
+        return np.asarray(ncfile.variables[name][0], dtype=float) - accum_00z[name]
 
-    for var_name in ncfile.variables:
-        # Skip if not in mapping dictionary
-        if var_name not in WRF_TO_ECMWF_PARAMID:
+    # ---------------- native fields -----------------------------------------
+    print("\n=== NATIVE FIELDS ===")
+    for key in [k for k in WRF_TO_ECMWF_PARAMID if k in ncfile.variables]:
+        if not want(key):
             continue
-
-        # DEBUG: skip if debug_vars is populated and var_name is not in list
-        if debug_vars and var_name not in debug_vars:
-            continue
-
-        var = ncfile.variables[var_name]
-        dims = var.dimensions
-
-        # Determine if it's 3D (has atmospheric vertical dimension)
-        has_vertical = any(d in dims for d in ['bottom_top', 'bottom_top_stag'])
-
-        if has_vertical:
-            # 3D variable - interpolate to pressure levels
-            print(f"3D interpolation: {var_name}...")
-            try:
-                var_data = wrf.getvar(ncfile, var_name, timeidx=0)
-
-                # Destaggering if necessary
-                stagger_type = is_staggered(var_name)
-                if stagger_type:
-                    print(f"  Destaggering {var_name} ({stagger_type})...")
-                    if stagger_type == 'vertical':
-                        var_data = wrf.destagger(var_data, stagger_dim=-3)
-                    elif stagger_type == 'west_east':
-                        var_data = wrf.destagger(var_data, stagger_dim=-1)
-                    elif stagger_type == 'south_north':
-                        var_data = wrf.destagger(var_data, stagger_dim=-2)
-
-                # Interpolate to pressure levels
-                var_interp = wrf.vinterp(ncfile,
-                                         field=var_data,
-                                         vert_coord="pressure",
-                                         interp_levels=pressure_levels,
-                                         extrapolate=True,
-                                         timeidx=0)
-
-                output_vars[var_name] = var_interp.values
-                print(f"  {var_name} (3D interpolated, shape: {var_interp.shape})")
-            except Exception as e:
-                print(f"  {var_name}: {str(e)}")
-        else:
-            # 2D variable - copy directly
-            print(f"2D copy: {var_name}...")
-            try:
-                var_data = wrf.getvar(ncfile, var_name, timeidx=0)
-
-                # Special conversion: HGT (m) -> geopotential (m²/s²)
-                if var_name == 'HGT':
-                    g = 9.80665  # m/s²
-                    output_vars[var_name] = var_data.values * g
-                    print(f"  {var_name} (2D, converted to geopotential: {var_data.values.min()*g:.1f}-{var_data.values.max()*g:.1f} m²/s²)")
-                # Special conversion: VAR_SSO (variance m²) -> sdor (standard deviation m)
-                elif var_name == 'VAR_SSO':
-                    output_vars[var_name] = np.sqrt(var_data.values)
-                    print(f"  {var_name} (2D, converted to standard deviation: {np.sqrt(var_data.values).min():.2f}-{np.sqrt(var_data.values).max():.2f} m)")
-                # Special conversion: Q2 (mixing ratio) -> specific humidity: q = w/(1+w)
-                elif var_name == 'Q2':
-                    q2_mr = var_data.values
-                    output_vars[var_name] = q2_mr / (1.0 + q2_mr)
-                    print(f"  {var_name} (2D, mixing ratio -> specific humidity)")
-                # Special conversion: RAINNC, RAINC (mm since run init) -> tp (m since 00Z)
-                elif var_name in ['RAINNC', 'RAINC']:
-                    acc = (var_data.values - accum_00z[var_name]) / 1000.0  # mm -> m
-                    if np.nanmin(acc) < -1e-6:
-                        print(f"  WARNING: {var_name} minus 00Z has negative values (min {np.nanmin(acc):.3e} m)")
-                    # A GRIB-sourced reference (hpc/fix_tp_accum.py) carries ~1e-8 m of
-                    # packing quantisation: clip only that, keep real negatives visible
-                    acc = np.where((acc < 0) & (acc > -1e-6), 0.0, acc)
-                    output_vars[var_name] = acc
-                    print(f"  {var_name} (2D, since 00Z, converted to m: {np.nanmin(acc):.6f}-{np.nanmax(acc):.6f} m)")
-                # Other accumulated fields (currently unmapped): refer to 00Z, native units
-                elif var_name in accum_00z:
-                    output_vars[var_name] = var_data.values - accum_00z[var_name]
-                    print(f"  {var_name} (2D, accumulated since 00Z)")
-                else:
-                    output_vars[var_name] = var_data.values
-                    print(f"  {var_name} (2D, shape: {var_data.shape})")
-            except Exception as e:
-                print(f"  {var_name}: {str(e)}")
-
-    # ==================== DERIVED VARIABLES ====================
-    print("\n=== CALCULATING DERIVED VARIABLES ===")
-
-    # 3D derived variables to interpolate
-    # DISABLED 2026-06: 'theta','rh','pvo' not requested by any MeteoSwiss/ERA5/COSMO column
-    # (mapping commented out in wrf_era5_comparison.py). Re-add here AND uncomment there to re-enable.
-    derived_3d = ['tk', 'z']  # was: ['tk', 'theta', 'rh', 'z', 'pvo']
-    for var_name in derived_3d:
-        if var_name not in WRF_TO_ECMWF_PARAMID:
-            continue
-
-        # DEBUG: skip if debug_vars is populated and var_name is not in list
-        if debug_vars and var_name not in debug_vars:
-            continue
-
-        print(f"3D derived interpolation: {var_name}...")
+        info = WRF_TO_ECMWF_PARAMID[key]
         try:
-            var_data = wrf.getvar(ncfile, var_name, timeidx=0)
-            var_interp = wrf.vinterp(ncfile,
-                                     field=var_data,
-                                     vert_coord="pressure",
-                                     interp_levels=pressure_levels,
-                                     extrapolate=True,
-                                     timeidx=0)
+            if info['levelType'] == 'isobaricInhPa':
+                data = gv(key)
+                dims = ncfile.variables[key].dimensions
+                if 'bottom_top_stag' in dims:
+                    data = wrf.destagger(data, stagger_dim=-3)
+                elif 'west_east_stag' in dims:
+                    data = wrf.destagger(data, stagger_dim=-1)
+                elif 'south_north_stag' in dims:
+                    data = wrf.destagger(data, stagger_dim=-2)
+                values = to_levels(data)
+                if key in ('QCLOUD', 'QICE'):
+                    values = np.maximum(values, 0.0)
+                emit(key, values, "(pressure levels)")
+                continue
 
-            # Special conversion: z (geopotential height m) -> geopotential (m²/s²)
-            if var_name == 'z':
-                g = 9.80665  # m/s²
-                output_vars[var_name] = var_interp.values * g
-                print(f"  {var_name} (converted to geopotential: shape {var_interp.shape})")
+            if info.get('stepType') == 'accum':
+                values = since_00z(key)
+                low = np.nanmin(values)
+                if low < 0:
+                    # A GRIB-sourced reference carries ~1e-8 of packing noise;
+                    # clip only that, so a real negative stays visible.
+                    if low < -1e-3:
+                        print(f"  WARNING: {key} minus 00Z reaches {low:.3e}")
+                    values = np.where(values < 0, 0.0, values)
             else:
-                output_vars[var_name] = var_interp.values
-                print(f"  {var_name} (shape: {var_interp.shape})")
-        except Exception as e:
-            print(f"  {var_name}: {str(e)}")
+                values = np.asarray(gv(key).values, dtype=float)
 
-    # 2D derived variables
-    derived_2d = ['td2', 'slp']
-    for var_name in derived_2d:
-        if var_name not in WRF_TO_ECMWF_PARAMID:
+            if key == 'VAR_SSO':
+                values = np.sqrt(values)          # variance -> standard deviation
+            elif key == 'SST':
+                values = np.where(ocean, values, np.nan)
+            values = values * UNIT_SCALE.get(key, 1.0)
+            emit(key, values)
+        except Exception as exc:                  # noqa: BLE001 - reported below
+            print(f"  {key}: FAILED: {exc}")
+
+    # ---------------- derived, pressure levels ------------------------------
+    print("\n=== DERIVED (pressure levels) ===")
+    for key in ('tk', 'z', 'rh', 'omega', 'wa'):
+        if not want(key):
             continue
+        try:
+            values = to_levels(gv(key))
+            if key == 'z':
+                values = values * G           # geopotential height -> geopotential
+            emit(key, values)
+        except Exception as exc:
+            print(f"  {key}: FAILED: {exc}")
 
-        # DEBUG: skip if debug_vars is populated and var_name is not in list
-        if debug_vars and var_name not in debug_vars:
+    if want('q'):
+        try:
+            mr = np.maximum(to_levels(gv("QVAPOR")), 0.0)   # mixing ratio
+            emit('q', mr / (1.0 + mr), "(mixing ratio -> specific humidity)")
+        except Exception as exc:
+            print(f"  q: FAILED: {exc}")
+
+    # ---------------- derived, single level ---------------------------------
+    print("\n=== DERIVED (single level) ===")
+    # wrf-python defaults to degC for dewpoint and hPa for sea level pressure;
+    # ask it for the units the ECMWF parameters are defined in. (The GRIB1
+    # archive wrote 2d straight through, so its 2d is in degC under paramId 168.)
+    for key, kwargs in (('td2', dict(units='K')), ('rh2', {}), ('slp', dict(units='Pa'))):
+        if not want(key):
             continue
-
-        print(f"2D derived calculation: {var_name}...")
         try:
-            var_data = wrf.getvar(ncfile, var_name, timeidx=0)
+            emit(key, np.asarray(gv(key, **kwargs).values, dtype=float))
+        except Exception as exc:
+            print(f"  {key}: FAILED: {exc}")
 
-            # Special conversion: slp (hPa) -> msl (Pa)
-            if var_name == 'slp':
-                output_vars[var_name] = var_data.values * 100  # hPa -> Pa
-                print(f"  {var_name} (converted to Pa: {var_data.values.min()*100:.1f}-{var_data.values.max()*100:.1f} Pa)")
-            else:
-                output_vars[var_name] = var_data.values
-                print(f"  {var_name} (shape: {var_data.shape})")
-        except Exception as e:
-            print(f"  {var_name}: {str(e)}")
-
-    # Surface Pressure (PSFC) - no masking needed
-    if 'PSFC' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'PSFC' in debug_vars):
-        print("Processing PSFC (surface pressure)...")
+    if want('skt'):
         try:
-            psfc = wrf.getvar(ncfile, "PSFC", timeidx=0)  # Pa
-            output_vars['PSFC'] = psfc.values
-            print(f"  PSFC -> sp ({psfc.values.min():.1f}-{psfc.values.max():.1f} Pa)")
-        except Exception as e:
-            print(f"  PSFC: {str(e)}")
+            # LWUPB = emissivity * sigma * T^4
+            lwupb = gv("LWUPB").values
+            emit('skt', (lwupb / (0.98 * 5.67e-8)) ** 0.25)
+        except Exception as exc:
+            print(f"  skt: FAILED: {exc}")
 
-    # Sea Surface Temperature (SST) - ocean only
-    if 'SST' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'SST' in debug_vars):
-        print("Processing SST (sea surface temperature - ocean only)...")
+    if want('slor'):
         try:
-            sst_var = wrf.getvar(ncfile, "SST", timeidx=0)  # K
-            sst_data = sst_var.values.astype(float)
+            gy, gx = np.gradient(gv("HGT").values, dy, dx)
+            emit('slor', np.sqrt(gx ** 2 + gy ** 2))
+        except Exception as exc:
+            print(f"  slor: FAILED: {exc}")
 
-            # Mask: sst only over ocean
-            if ocean_mask is not None:
-                sst_data[~ocean_mask] = np.nan
-                valid_points = np.sum(~np.isnan(sst_data))
-                print(f"  SST (OCEAN ONLY, {valid_points} valid points, {sst_data[ocean_mask].min():.1f}-{sst_data[ocean_mask].max():.1f} K)")
-            else:
-                print(f"  SST (NO MASK, {sst_data.min():.1f}-{sst_data.max():.1f} K)")
-
-            output_vars['SST'] = sst_data
-        except Exception as e:
-            print(f"  SST: {str(e)}")
-
-    # Cache QVAPOR for reuse in specific humidity and TCW calculations
-    _qvapor_cache = None
-    if any(v in WRF_TO_ECMWF_PARAMID for v in ['q', 'tcw', 'tqv']):
-        if not debug_vars or any(v in debug_vars for v in ['q', 'tcw', 'tqv']):
-            _qvapor_cache = wrf.getvar(ncfile, "QVAPOR", timeidx=0)
-
-    # Specific humidity from QVAPOR (interpolated)
-    if 'q' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'q' in debug_vars):
-        print("Calculating specific_humidity from QVAPOR...")
+    if want('rsn'):
         try:
-            qvapor = _qvapor_cache
-            qvapor_interp = wrf.vinterp(ncfile,
-                                        field=qvapor,
-                                        vert_coord="pressure",
-                                        interp_levels=pressure_levels,
-                                        extrapolate=True,
-                                        timeidx=0)
-            # q = w / (1 + w)
-            specific_humidity = qvapor_interp / (1.0 + qvapor_interp)
-            output_vars['q'] = specific_humidity.values
-            print(f"  specific_humidity (shape: {specific_humidity.shape})")
-        except Exception as e:
-            print(f"  specific_humidity: {str(e)}")
+            swe = gv("SNOW").values          # kg/m^2
+            depth = gv("SNOWH").values       # m
+            # ERA5 reports the fresh-snow default where there is no snow pack.
+            emit('rsn', np.where(depth > 1e-6, swe / np.maximum(depth, 1e-6), 100.0))
+        except Exception as exc:
+            print(f"  rsn: FAILED: {exc}")
 
-    # Total Column Water (TCW) from all hydrometeor components
-    if 'tcw' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'tcw' in debug_vars):
-        print("Calculating TCW (Total Column Water)...")
+    # Soil: RUC's first four levels mapped onto the ERA5 layer names.
+    for native, prefix in (('SMOIS', 'SMOIS'), ('TSLB', 'TSLB')):
+        keys = [f'{prefix}{i}' for i in range(1, 5)]
+        if not any(want(k) for k in keys):
+            continue
         try:
-            # Read all water components (kg/kg mixing ratio)
-            qvapor = _qvapor_cache
-            qcloud = wrf.getvar(ncfile, "QCLOUD", timeidx=0)
-            qrain = wrf.getvar(ncfile, "QRAIN", timeidx=0)
-            qice = wrf.getvar(ncfile, "QICE", timeidx=0)
-            qsnow = wrf.getvar(ncfile, "QSNOW", timeidx=0)
-            qgraup = wrf.getvar(ncfile, "QGRAUP", timeidx=0)
+            layers = np.asarray(ncfile.variables[native][0], dtype=float)
+            for i, key in enumerate(keys):
+                if want(key):
+                    emit(key, layers[i])
+        except Exception as exc:
+            print(f"  {native}: FAILED: {exc}")
 
-            # Sum all components
-            q_total = qvapor + qcloud + qrain + qice + qsnow + qgraup
-
-            # Calculate pressure
-            pressure = wrf.getvar(ncfile, "pressure", timeidx=0)  # hPa
-
-            # Vertical integration: TCW = integral q_total * (dp/g)
-            g = 9.81  # m/s^2
-            # Calculate dp between levels (in Pa)
-            dp = np.abs(np.diff(pressure.values * 100, axis=0))  # hPa -> Pa, absolute
-            dp = np.concatenate([dp, np.zeros_like(dp[-1:, :, :])], axis=0)  # Zero padding at top
-
-            # TCW = integral q * (dp/g) [kg/m^2]
-            tcw = np.sum(q_total.values * dp / g, axis=0)
-
-            output_vars['tcw'] = tcw
-            print(f"  tcw (shape: {tcw.shape}, range: {np.nanmin(tcw):.2f}-{np.nanmax(tcw):.2f} kg/m^2)")
-        except Exception as e:
-            print(f"  tcw: {str(e)}")
-
-    # Total Column Water Vapour (TQV/tcwv) - vertical integral of QVAPOR only
-    # (mirrors the tcw integration but with vapour alone; uses mixing ratio like tcw)
-    if 'tqv' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'tqv' in debug_vars):
-        print("Calculating TQV (Total Column Water Vapour)...")
+    if want('tirf'):
         try:
-            qvapor = _qvapor_cache if _qvapor_cache is not None else wrf.getvar(ncfile, "QVAPOR", timeidx=0)
-            pressure = wrf.getvar(ncfile, "pressure", timeidx=0)  # hPa
-            g = 9.81  # m/s^2
-            dp = np.abs(np.diff(pressure.values * 100, axis=0))  # hPa -> Pa, absolute
-            dp = np.concatenate([dp, np.zeros_like(dp[-1:, :, :])], axis=0)  # Zero padding at top
-            tqv = np.sum(qvapor.values * dp / g, axis=0)  # kg/m^2
-            output_vars['tqv'] = tqv
-            print(f"  tqv (shape: {tqv.shape}, range: {np.nanmin(tqv):.2f}-{np.nanmax(tqv):.2f} kg/m^2)")
-        except Exception as e:
-            print(f"  tqv: {str(e)}")
+            rain = since_00z('RAINNC') - since_00z('SNOWNC') - since_00z('GRAUPELNC')
+            emit('tirf', np.where(rain < 0, 0.0, rain), "(rain only, mm)")
+        except Exception as exc:
+            print(f"  tirf: FAILED: {exc}")
 
-    # Total Cloud Cover (TCC) from 3D cloud fraction (maximum-random overlap, as ECMWF/RRTMG)
-    if 'tcc' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'tcc' in debug_vars):
-        print("Calculating TCC (Total Cloud Cover, maximum-random overlap)...")
+    if want('tsr'):
         try:
-            cldfra = wrf.getvar(ncfile, "CLDFRA", timeidx=0).values  # (lev, lat, lon), 0..1
-            cldfra = np.clip(cldfra, 0.0, 1.0)
-            nlev = cldfra.shape[0]
-            # C_tot = 1 - (1-C_1) * prod_{k=2..N} (1 - max(C_k,C_{k-1})) / (1 - C_{k-1})
-            eps = 1e-6
-            clear = 1.0 - cldfra[0]
-            prev = cldfra[0]
-            for k in range(1, nlev):
-                cur = cldfra[k]
-                denom = np.maximum(1.0 - prev, eps)
-                clear = clear * (1.0 - np.maximum(cur, prev)) / denom
-                prev = cur
-            tcc = np.clip(1.0 - clear, 0.0, 1.0)
-            output_vars['tcc'] = tcc
-            print(f"  tcc (shape: {tcc.shape}, range: {np.nanmin(tcc):.2f}-{np.nanmax(tcc):.2f})")
-        except Exception as e:
-            print(f"  tcc: {str(e)}")
+            emit('tsr', since_00z('ACSWDNT') - since_00z('ACSWUPT'), "(net SW at top)")
+        except Exception as exc:
+            print(f"  tsr: FAILED: {exc}")
 
-    # Skin temperature from longwave radiation (Stefan-Boltzmann)
-    if 'skt' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'skt' in debug_vars):
-        print("Calculating skin temperature (Stefan-Boltzmann)...")
+    if want('mucape') or want('mucin'):
         try:
-            # LWUPB = emissivity * sigma * T_skin^4
-            # T_skin = (LWUPB / (emissivity * sigma))^(1/4)
-            emissivity = 0.98
-            stefan_boltzmann = 5.67e-8  # W m^-2 K^-4
+            cape = wrf.getvar(ncfile, "cape_2d", timeidx=0, cache=cache)
 
-            lwupb = wrf.getvar(ncfile, "LWUPB", timeidx=0)
-            skin_temp = (lwupb.values / (emissivity * stefan_boltzmann)) ** 0.25
+            def dense(arr):
+                """Fill the gaps cape_2d leaves with zero.
 
-            output_vars['skt'] = skin_temp
-            print(f"  skt (shape: {skin_temp.shape})")
-        except Exception as e:
-            print(f"  skt: {str(e)}")
+                The Fortran flags CIN as missing wherever CAPE < 100 J/kg, and
+                CAPE where the parcel has no equilibrium level -- half the
+                domain on a quiet day. wrf-python surfaces that as NaN (not as
+                a mask, so ma.filled would be a no-op) and sometimes as the
+                9.97e36 fill value. Zero is both the physical reading (no
+                available energy, no inhibition) and what keeps the field dense
+                for training; see MISSING_VARIABLES.md.
+                """
+                a = np.asarray(arr, dtype=float)
+                return np.where(np.isfinite(a) & (np.abs(a) < 1e30), a, 0.0)
 
-    # Slope of orography (topography gradient)
-    if 'slor' in WRF_TO_ECMWF_PARAMID and (not debug_vars or 'slor' in debug_vars):
-        print("Calculating slope of orography...")
+            if want('mucape'):
+                emit('mucape', dense(cape[0].values), "(most unstable, gaps -> 0)")
+            if want('mucin'):
+                emit('mucin', dense(cape[1].values), "(most unstable, gaps -> 0)")
+            del cape
+        except Exception as exc:
+            print(f"  mucape/mucin: FAILED: {exc}")
+
+    # ---------------- winds at fixed heights --------------------------------
+    height_keys = ('u100', 'v100', 'u200', 'v200', 'vwsh')
+    if any(want(k) for k in height_keys):
         try:
-            hgt = wrf.getvar(ncfile, "HGT", timeidx=0)
+            zagl = gv("height_agl")
+            ua, va = gv("ua"), gv("va")
+            # interplevel takes metres and does not extrapolate; the lowest mass
+            # level sits at ~25 m AGL so 100 m and 200 m are inside the column.
+            uh = wrf.interplevel(ua, zagl, [100., 200.], meta=False)
+            vh = wrf.interplevel(va, zagl, [100., 200.], meta=False)
+            for key, arr in (('u100', uh[0]), ('v100', vh[0]),
+                             ('u200', uh[1]), ('v200', vh[1])):
+                if want(key):
+                    emit(key, np.ma.filled(arr, np.nan))
+            if want('vwsh'):
+                du = np.ma.filled(uh[0], np.nan) - gv("U10").values
+                dv = np.ma.filled(vh[0], np.nan) - gv("V10").values
+                emit('vwsh', np.sqrt(du ** 2 + dv ** 2) / 90.0, "(bulk 10-100 m)")
+            del zagl, ua, va, uh, vh
+        except Exception as exc:
+            print(f"  winds at height: FAILED: {exc}")
 
-            # Gradients (returns grad_y, grad_x)
-            grad_y, grad_x = np.gradient(hgt.values, dy, dx)
+    # ---------------- column integrals and cloud ----------------------------
+    if want('tcw') or want('tqv'):
+        try:
+            pres_pa = gv("pressure").values * 100.0
+            dp = np.abs(np.diff(pres_pa, axis=0))
+            dp = np.concatenate([dp, np.zeros_like(dp[-1:])], axis=0)
+            qv = gv("QVAPOR").values
+            if want('tqv'):
+                emit('tqv', np.sum(qv * dp / G, axis=0))
+            if want('tcw'):
+                total = qv.copy()
+                for name in ("QCLOUD", "QRAIN", "QICE", "QSNOW", "QGRAUP"):
+                    total += gv(name).values
+                emit('tcw', np.sum(total * dp / G, axis=0))
+                del total
+            del dp, pres_pa, qv
+        except Exception as exc:
+            print(f"  tcw/tqv: FAILED: {exc}")
 
-            # Slope magnitude
-            slope = np.sqrt(grad_x**2 + grad_y**2)
+    cloud_keys = ('tcc', 'lcc', 'mcc', 'hcc')
+    if any(want(k) for k in cloud_keys):
+        try:
+            cldfra = np.clip(gv("CLDFRA").values, 0.0, 1.0)
 
-            output_vars['slor'] = slope
-            print(f"  slor (shape: {slope.shape})")
-        except Exception as e:
-            print(f"  slor: {str(e)}")
+            def overlap(frac):
+                """Maximum-random overlap, as ECMWF/RRTMG."""
+                clear = 1.0 - frac[0]
+                prev = frac[0]
+                for k in range(1, frac.shape[0]):
+                    cur = frac[k]
+                    clear = clear * (1.0 - np.maximum(cur, prev)) / np.maximum(1.0 - prev, 1e-6)
+                    prev = cur
+                return np.clip(1.0 - clear, 0.0, 1.0)
 
-    # ==================== GRIB1 SAVING ====================
-    print(f"\n=== GRIB1 SAVING ===")
-    print(f"Output file: {output_file}")
-    print(f"Variables to write: {len(output_vars)}")
-    if debug_vars:
-        print(f"DEBUG MODE: saving only {list(output_vars.keys())}")
+            if want('tcc'):
+                emit('tcc', overlap(cldfra))
+            if any(want(k) for k in ('lcc', 'mcc', 'hcc')):
+                sigma = gv("pressure").values * 100.0 / gv("PSFC").values[None, :, :]
+                for key, (hi, lo) in CLOUD_BANDS.items():
+                    if want(key):
+                        band = (sigma <= hi) & (sigma > lo)
+                        emit(key, overlap(np.where(band, cldfra, 0.0)))
+                del sigma
+            del cldfra
+        except Exception as exc:
+            print(f"  cloud cover: FAILED: {exc}")
 
-    # Coordinates for GRIB (always 2D for Mercator)
-    lats = lat_2d  # 2D
-    lons = lon_2d  # 2D
-
-    # Verify there are variables to write
-    if not output_vars:
-        print("\nERROR: No variables to write to GRIB file!")
-        print("Verify that WRF variables are present in WRF_TO_ECMWF_PARAMID dictionary")
+    # ---------------- write --------------------------------------------------
+    missing = [k for k in WRF_TO_ECMWF_PARAMID if want(k) and k not in out]
+    if missing:
+        print(f"\nERROR: {len(missing)} field(s) could not be produced: {missing}")
+        ncfile.close()
+        sys.exit(1)
+    if not out:
+        print("\nERROR: nothing to write")
         ncfile.close()
         sys.exit(1)
 
-    print(f"\n=== WRITING GRIB FILE ===")
-    print(f"Variables to write: {len(output_vars)}")
-
+    print(f"\n=== WRITING GRIB2: {output_file} ===")
+    written = 0
     with open(output_file, 'wb') as fout:
-        written_count = 0
-
-        for var_name, var_data in output_vars.items():
-            param_info = WRF_TO_ECMWF_PARAMID[var_name]
-            param_id = param_info['paramId']
-            short_name = param_info['shortName']
-
-            # Determine if 3D or 2D from shape
-            is_3d = len(var_data.shape) == 3  # (pressure, lat, lon)
-
-            if is_3d:
-                # 3D variable - write for each pressure level
-                for lev_idx, lev_val in enumerate(pressure_levels):
-                    gid = codes_grib_new_from_samples(grib_template_pl)
-
-                    # Time metadata
-                    codes_set(gid, 'dataDate', data_date)
-                    codes_set(gid, 'dataTime', data_time)
-                    codes_set(gid, 'startStep', 0)
-                    codes_set(gid, 'endStep', 0)
-
-                    # Grid representation type (GRIB1) - Mercator
-                    codes_set(gid, 'dataRepresentationType', 1)  # Mercator
-
-                    # Grid dimensions
-                    nj = lats.shape[0]
-                    ni = lats.shape[1]
-                    codes_set(gid, 'Ni', ni)
-                    codes_set(gid, 'Nj', nj)
-
-                    # Mercator projection parameters
-                    codes_set(gid, 'latitudeOfFirstGridPointInDegrees', float(lats[0, 0]))
-                    codes_set(gid, 'longitudeOfFirstGridPointInDegrees', float(lons[0, 0]))
-                    codes_set(gid, 'latitudeOfLastGridPointInDegrees', float(lats[-1, -1]))
-                    codes_set(gid, 'longitudeOfLastGridPointInDegrees', float(lons[-1, -1]))
-                    codes_set(gid, 'LaDInDegrees', float(truelat1))  # Latitude where DX/DY are specified
-                    codes_set(gid, 'DiInMetres', float(dx))
-                    codes_set(gid, 'DjInMetres', float(dy))
-                    codes_set(gid, 'resolutionAndComponentFlags', 8)  # DX/DY are valid
-
-                    # Scanning mode
-                    codes_set(gid, 'jScansPositively', 0)
-                    codes_set(gid, 'iScansNegatively', 0)
-
-                    # Level
-                    codes_set(gid, 'indicatorOfTypeOfLevel', 100)  # isobaric
-                    codes_set(gid, 'level', int(lev_val))
-
-                    # Parameter
-                    codes_set(gid, 'table2Version', 128)
-                    codes_set(gid, 'indicatorOfParameter', param_id)
-
-                    # Data
-                    data_slice = var_data[lev_idx, :, :]
-
-                    # NaN handling: GRIB1 requires bitmap for missing values
-                    data_flat = data_slice.flatten()
-                    if np.any(np.isnan(data_flat)):
-                        # Enable bitmap to indicate valid/missing points
-                        codes_set(gid, 'bitmapPresent', 1)
-                        # Replace NaN with 0 (bitmap will indicate which are missing)
-                        data_flat = np.where(np.isnan(data_flat), 0.0, data_flat)
-
-                    codes_set_values(gid, data_flat)
-                    # Lossless compression: set AFTER values so second-order grouping is computed (~-37%)
-                    codes_set(gid, 'packingType', 'grid_second_order')
-                    codes_write(gid, fout)
-                    codes_release(gid)
-                    written_count += 1
-            else:
-                # 2D variable - surface
-                gid = codes_grib_new_from_samples(grib_template_sfc)
-
-                # Time metadata
-                codes_set(gid, 'dataDate', data_date)
-                codes_set(gid, 'dataTime', data_time)
-                codes_set(gid, 'startStep', 0)
-                codes_set(gid, 'endStep', 0)
-
-                # Grid representation type (GRIB1) - Mercator
-                codes_set(gid, 'dataRepresentationType', 1)  # Mercator
-
-                # Grid dimensions
-                nj = lats.shape[0]
-                ni = lats.shape[1]
-                codes_set(gid, 'Ni', ni)
-                codes_set(gid, 'Nj', nj)
-
-                # Mercator projection parameters
-                codes_set(gid, 'latitudeOfFirstGridPointInDegrees', float(lats[0, 0]))
-                codes_set(gid, 'longitudeOfFirstGridPointInDegrees', float(lons[0, 0]))
-                codes_set(gid, 'latitudeOfLastGridPointInDegrees', float(lats[-1, -1]))
-                codes_set(gid, 'longitudeOfLastGridPointInDegrees', float(lons[-1, -1]))
-                codes_set(gid, 'LaDInDegrees', float(truelat1))  # Latitude where DX/DY are specified
-                codes_set(gid, 'DiInMetres', float(dx))
-                codes_set(gid, 'DjInMetres', float(dy))
-                codes_set(gid, 'resolutionAndComponentFlags', 8)  # DX/DY are valid
-
-                # Scanning mode
-                codes_set(gid, 'jScansPositively', 0)
-                codes_set(gid, 'iScansNegatively', 0)
-
-                # Determine level type based on variable
-                # 2m variables: T2, Q2, td2
-                if var_name in ['T2', 'Q2', 'td2']:
-                    codes_set(gid, 'indicatorOfTypeOfLevel', 105)  # height above ground
-                    codes_set(gid, 'level', 2)  # 2 meters
-                # 10m variables: U10, V10
-                elif var_name in ['U10', 'V10']:
-                    codes_set(gid, 'indicatorOfTypeOfLevel', 105)  # height above ground
-                    codes_set(gid, 'level', 10)  # 10 meters
-                # Mean sea level pressure
-                elif var_name == 'slp':
-                    codes_set(gid, 'indicatorOfTypeOfLevel', 102)  # mean sea level
-                    codes_set(gid, 'level', 0)
-                # Column-integrated / entire-atmosphere fields: tcw, tqv (vapour), tcc (cloud cover)
-                elif var_name in ['tcw', 'tqv', 'tcc']:
-                    codes_set(gid, 'indicatorOfTypeOfLevel', 200)  # entire atmosphere
-                    codes_set(gid, 'level', 0)
-                # Other variables: surface
-                else:
-                    codes_set(gid, 'indicatorOfTypeOfLevel', 1)  # surface
-                    codes_set(gid, 'level', 0)
-
-                # Parameter
-                codes_set(gid, 'table2Version', 128)
-                codes_set(gid, 'indicatorOfParameter', param_id)
-                if var_name in accum_00z:
-                    # Marker: accumulation referred to 00Z of the same day
-                    codes_set(gid, 'generatingProcessIdentifier', accum_ref.ACCUM_FROM_00Z_GENPROC)
-
-                # Data
-                data_slice = var_data
-
-                # NaN handling: GRIB1 requires bitmap for missing values
-                data_flat = data_slice.flatten()
-                if np.any(np.isnan(data_flat)):
-                    # Enable bitmap to indicate valid/missing points
-                    codes_set(gid, 'bitmapPresent', 1)
-                    # Replace NaN with 0 (bitmap will indicate which are missing)
-                    data_flat = np.where(np.isnan(data_flat), 0.0, data_flat)
-
-                codes_set_values(gid, data_flat)
-                # Lossless compression: set AFTER values so second-order grouping is computed (~-37%)
-                codes_set(gid, 'packingType', 'grid_second_order')
-                codes_write(gid, fout)
-                codes_release(gid)
-                written_count += 1
-
-            print(f"  {var_name} -> {short_name} (paramId={param_id})")
-
-    print(f"\nConversion completed!")
-    print(f"Output GRIB file: {output_file}")
-    print(f"Projection: Mercator")
-    print(f"GRIB messages written: {written_count}")
-    print(f"Pressure levels: {pressure_levels}")
-
-    # Verify file was written correctly
-    if os.path.exists(output_file):
-        file_size = os.path.getsize(output_file)
-        print(f"File size: {file_size:,} bytes ({file_size/1024/1024:.2f} MB)")
-        if file_size == 0:
-            print("WARNING: GRIB file is empty!")
-        if written_count == 0:
-            print("WARNING: No GRIB messages written!")
-    else:
-        print(f"ERROR: File {output_file} was not created!")
-
+        for key, data in out.items():
+            info = WRF_TO_ECMWF_PARAMID[key]
+            data = np.asarray(data)
+            for idx, level in enumerate(info['levels']):
+                field = data[idx] if data.ndim == 3 else data
+                write_message(fout, field, info, level, grid, valid)
+                written += 1
     ncfile.close()
+
+    expected = EXPECTED_MESSAGES if not debug_vars else sum(
+        len(WRF_TO_ECMWF_PARAMID[k]['levels']) for k in out)
+    print(f"Written {written} messages (expected {expected})")
+    if written != expected:
+        sys.exit(f"ERROR: wrote {written} messages, expected {expected}")
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.input, args.output, debug_vars=args.debug_vars,
-         accum_ref_dir=args.accum_ref_dir)
+    main(args.input, args.output, args.debug_vars, args.accum_ref_dir)

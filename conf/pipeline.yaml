@@ -42,7 +42,11 @@ pipeline:
 paths:
   work_dir: /leonardo_work/AIFPT_AILAMIT/CHAPTER
   wrfout_dir: ${paths.work_dir}/wrfout
-  grib_dir: ${paths.work_dir}/grib
+  # GRIB2 schema (183 messages). Deliberately a different tree from the old
+  # GRIB1 `grib/`: convert_step.sh keys its re-entrancy on the output file
+  # existing, so writing the new schema into the old tree would silently skip
+  # every hour already converted. `grib/` is dropped once `grib_v2` is validated.
+  grib_dir: ${paths.work_dir}/grib_v2
   # 00Z reference sidecars for accumulated fields (tp is referred to 00Z of the same day;
   # see accum_ref.py). Shared by every chain: the 00Z wrfout is never deleted without it.
   accum_ref_dir: ${paths.work_dir}/accum_ref
@@ -103,7 +107,7 @@ slurm:
   # convert runs on dcgp_usr_prod -> needs the DCGP-budget association
   step_convert_partition: dcgp_usr_prod
   step_convert_walltime: "01:00:00"
-  step_convert_mem: "20G"
+  step_convert_mem: "32G"   # measured peak RSS 18.2 GB for the 183-message schema; RAM is not billed on DCGP
   step_convert_account: aifpt_ailamit_0  # project AILAMIT, DCGP association
 
 # GRIB output naming (Anemoi convention)

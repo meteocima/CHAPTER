@@ -26,12 +26,23 @@ from datetime import datetime
 
 import numpy as np
 
-# WRF accumulated fields (accumulate from run init). Any of these that is in the
-# GRIB mapping gets referred to 00Z of the same day.
-ACCUMULATED_VARS = ['RAINNC', 'RAINC', 'ACSWDNB', 'ACLWDNB', 'ACHFX', 'ACLHF']
+# WRF accumulated fields (they accumulate from run init). Any of these needed by
+# the GRIB registry gets referred to 00Z of the same day. Sidecars store every
+# name in this list, not just the mapped ones, so a field enabled later still
+# finds its reference in sidecars written today -- but a name ADDED here makes
+# older sidecars incomplete, and those days have to be re-extracted from their
+# 00Z wrfout (accum_ref.py extract).
+ACCUMULATED_VARS = [
+    'RAINNC', 'RAINC',                      # precipitation (RAINC is 0: CU off)
+    'SNOWNC', 'GRAUPELNC',                  # needed by tp's rain-only sibling, tirf
+    'ACSWDNB', 'ACLWDNB',                   # downward SW/LW at the surface
+    'ACSWDNT', 'ACSWUPT',                   # top of atmosphere, for tsr
+    'SFROFF', 'UDROFF',                     # runoff (monotone; ACSNOM is not, see the registry)
+    'ACHFX', 'ACLHF',                       # identically zero in this run; kept for completeness
+]
 
-# GRIB1 marker on messages holding a 00Z-referred accumulation
-# (default generatingProcessIdentifier of the GRIB1 sample is 127).
+# Marker on messages holding a 00Z-referred accumulation (the GRIB sample
+# default generatingProcessIdentifier is 127).
 ACCUM_FROM_00Z_GENPROC = 128
 
 

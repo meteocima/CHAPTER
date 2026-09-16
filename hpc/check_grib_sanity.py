@@ -1,13 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Sanity check of CHAPTER GRIBs against partly-empty sources.
+Sanity check of CHAPTER GRIB2 files against partly-empty sources and schema drift.
 
-A wrfout that is partly zero-filled (truncated transfer, stub) still opens as
-NetCDF and converts "fine": 2024-12-29T18 came out with lsm, surface z, slor,
-skt, tcc and tp all zero. Static fields can never be all-zero over the domain,
-so they are the tell. Also reports the tp marker (generatingProcessIdentifier
-128 = referred to 00Z of the same day, see accum_ref.py) and that 00Z tp is zero.
+Three independent failure modes are covered:
+
+1. A wrfout that is partly zero-filled (truncated transfer, stub) still opens as
+   NetCDF and converts "fine": 2024-12-29T18 came out with lsm, surface z, slor,
+   skt, tcc and tp all zero. Static fields can never be all-zero over the domain,
+   so they are the tell.
+2. A field that raises inside the converter is reported and the run aborts, but a
+   file produced by an older schema would pass unnoticed -- so the full set of
+   (shortName -> number of messages) is compared against the registry.
+3. tp must carry the 00Z marker (generatingProcessIdentifier 128, see
+   accum_ref.py) and must be exactly zero in the 00Z file.
 
 Usage (eccodes env as in hpc/convert_step.sh):
     python hpc/check_grib_sanity.py <grib> [<grib> ...]
@@ -16,6 +22,7 @@ Exit code 1 if any file is BAD.
 """
 
 import argparse
+import collections
 import glob
 import os
 import sys
@@ -23,13 +30,24 @@ import time
 
 from eccodes import codes_get, codes_grib_new_from_file, codes_release
 
-# (shortName, typeOfLevel indicator, level) that must not be all zero
-STATIC = {('lsm', 1, 0), ('z', 1, 0), ('sdor', 1, 0), ('slor', 1, 0), ('skt', 1, 0)}
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from wrf_era5_comparison import WRF_TO_ECMWF_PARAMID  # noqa: E402
+
+# How many messages each shortName must contribute ('z' appears both on the
+# pressure levels and at the surface, hence the accumulation).
+EXPECTED = collections.Counter()
+for _info in WRF_TO_ECMWF_PARAMID.values():
+    EXPECTED[_info['shortName']] += len(_info['levels'])
+
+# Fields that are invariant in time and can never be all-zero over the domain.
+STATIC = {'lsm', 'z', 'sdor', 'slor', 'skt', 'tvl', 'slt', 'cvl'}
 TP_MARK = 128
 
 
 def check(path):
-    problems, seen = [], set()
+    problems = []
+    found = collections.Counter()
+    zero_static = set()
     tp_gp = tp_max = None
     with open(path, 'rb') as fh:
         while True:
@@ -37,18 +55,21 @@ def check(path):
             if gid is None:
                 break
             try:
-                key = (codes_get(gid, 'shortName'), codes_get(gid, 'indicatorOfTypeOfLevel', int),
-                       codes_get(gid, 'level'))
-                if key in STATIC:
-                    seen.add(key)
-                    if codes_get(gid, 'maximum') == 0 and codes_get(gid, 'minimum') == 0:
-                        problems.append(f"{key[0]} all zero")
+                name = codes_get(gid, 'shortName')
+                found[name] += 1
+                if name in STATIC and codes_get(gid, 'maximum') == 0 and codes_get(gid, 'minimum') == 0:
+                    zero_static.add(name)
                 if codes_get(gid, 'paramId') == 228:
                     tp_gp, tp_max = codes_get(gid, 'generatingProcessIdentifier'), codes_get(gid, 'maximum')
             finally:
                 codes_release(gid)
-    for key in sorted(STATIC - seen):
-        problems.append(f"{key[0]} missing")
+
+    for name in sorted(zero_static):
+        problems.append(f"{name} all zero")
+    for name in sorted(set(EXPECTED) | set(found)):
+        want, got = EXPECTED[name], found[name]
+        if want != got:
+            problems.append(f"{name}: {got} messages, expected {want}")
     if tp_gp is None:
         problems.append('tp missing')
     elif tp_gp != TP_MARK:
@@ -61,7 +82,7 @@ def check(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('files', nargs='*')
-    ap.add_argument('--grib-dir', default='/leonardo_work/AIFPT_AILAMIT/CHAPTER/grib')
+    ap.add_argument('--grib-dir', default='/leonardo_work/AIFPT_AILAMIT/CHAPTER/grib_v2')
     ap.add_argument('--month', action='append', default=[], help='YYYY-MM (repeatable)')
     ap.add_argument('--since-minutes', type=float, default=None,
                     help='with --month: only files modified in the last N minutes')

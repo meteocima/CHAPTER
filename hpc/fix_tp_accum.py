@@ -3,6 +3,11 @@
 """
 Refer tp in already-produced CHAPTER GRIBs to 00Z of the same day.
 
+HISTORICAL TOOL. It applies to the old GRIB1 archive under `grib/` only; the
+GRIB2 archive in `grib_v2/` is written with 00Z-referred accumulations from the
+start, so nothing there ever needs this fix. Kept for the record and for any
+leftover GRIB1 day (see logs/tp_accum_recovery_TODO.md).
+
 GRIBs written before commit 1eaffb8 hold tp = RAINNC accumulated since run init
 (18Z of the previous day). Since tp_grib(H) and tp_grib(00Z) share that origin,
     tp(H) = tp_grib(H) - tp_grib(00Z)
