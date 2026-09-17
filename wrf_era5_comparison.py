@@ -156,7 +156,9 @@ WRF_TO_ECMWF_PARAMID = {
     # values); ERA5 reports snow cover in per cent, hence UNIT_SCALE 100.
     'SNOWC':   {'shortName': 'snowc',  'paramId': 260038, 'long_name': 'Snow cover', 'units': '%', **_SFC},
     # SOILT1 is the temperature at the top of the snow/soil column; it is only a
-    # snow temperature where there is snow, so it is masked to SNOW > 0.
+    # snow temperature where the pack really covers the cell, so it is masked to
+    # SNOWC > 0.9 (see the tsn block in convert_to_pressure_levels.py). Out of
+    # season the message is legitimately empty: summer 2019 has no such point.
     'tsn':     {'shortName': 'tsn',    'paramId': 238,    'long_name': 'Temperature of snow layer', 'units': 'K', **_SFC},
     'CANWAT':  {'shortName': 'src',    'paramId': 198,    'long_name': 'Skin reservoir content', 'units': 'm', **_SFC},
     # RUC has 6 soil levels (0, 5, 20, 40, 160, 300 cm); ERA5 has 4 layers. The

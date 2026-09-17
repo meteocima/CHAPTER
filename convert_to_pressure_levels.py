@@ -390,14 +390,17 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
 
     if want('tsn'):
         try:
-            # SOILT1 is the temperature at the top of the snow/soil column, so it
-            # is a snow temperature only where snow actually covers the cell.
-            # Masking on SNOW > 0 is too loose: at patchy-snow points SOILT1 is
-            # the blended surface temperature and reaches 296 K in July (25% of
-            # those points above 275 K). Requiring the snow to cover most of the
-            # cell gives 273.15-280.6 K in July and 254.9-282.1 K in March, which
-            # is a snow temperature. Everything else is left missing.
-            covered = gv("SNOWC").values > 0.5
+            # SOILT1 is a snow temperature only where the snow pack actually
+            # covers the cell; elsewhere RUC falls back to the soil/skin
+            # temperature. SNOWC is not the flag its WRF description claims but
+            # a cover fraction, measured ~ min(1, SWE/32mm), and the melting
+            # point is respected only above 0.9: over 36 files spanning every
+            # month on disk, max(SOILT1 | SNOWC > 0.9) is 273.17 K everywhere
+            # (273.16 plus float32 rounding), against 282 K in the 0.5-0.9
+            # mosaic band, where more than half the points sit above freezing at
+            # noon, and 295-310 K on patchy or bare ground. So 0.9 it is
+            # (SWE >~ 29 mm, snow depth >~ 0.2 m); everything else is missing.
+            covered = gv("SNOWC").values > 0.9
             emit('tsn', np.where(covered, gv("SOILT1").values, np.nan),
                  f"(snow-covered cells only, {100 * np.mean(covered):.2f}% of the grid)")
         except Exception as exc:

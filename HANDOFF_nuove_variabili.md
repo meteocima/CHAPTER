@@ -126,7 +126,13 @@ Ancora aperte:
 1. `MISSING_VARIABLES.pdf` è da sottoporre ai colleghi.
 2. `mucape`/`mucin`: i punti indefiniti sono scritti come 0 (non come mancanti) per tenere i
    campi densi. Da confermare con chi userà i dati.
-3. `tsn` è mascherata dove la neve copre più di metà cella (`SNOWC > 0.5`). Con la soglia più
-   larga `SNOW > 0` un quarto dei punti restituiva la temperatura del suolo, non della neve.
+3. `tsn` è mascherata a `SNOWC > 0.9` (≈ SWE 29 mm), scelta con l'utente il 2026-09-17 dopo una
+   misura su 36 file in tutti i mesi su disco: è l'unica soglia sotto cui il campo non supera mai
+   il punto di fusione (max 273,17 K ovunque, contro 282 K nella banda mosaico 0,5-0,9 e 310 K
+   sul suolo nudo). D'estate la maschera è vuota — tutta l'estate 2019 non ha un punto innevato —
+   e il messaggio esce interamente mancante: verificato che si codifica e si rilegge senza errori
+   (`grid_ccsds`, 277 kB). ERA5 per convenzione non maschera `tsn` e lascia il filtro `sd > 0`
+   all'utente: qui si è preferito l'archivio fisicamente corretto, rimandando l'eventuale
+   riempimento alla ricetta Anemoi, dove le statistiche per variabile non tollerano NaN.
 4. **Nessun wrfout va cancellato** finché l'utente non lo dice: `wrfout_share` deve ancora essere
    copiato dal collega, e la cancellazione di `wrfout_2024fill` è sospesa. Sono 37 TB.
