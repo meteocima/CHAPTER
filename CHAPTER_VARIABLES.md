@@ -48,7 +48,29 @@ or, for the radiation budget at the top of the atmosphere, `nominalTop`.
 - Accumulated messages carry `generatingProcessIdentifier = 128` as the marker of the 00 UTC
   reference.
 
-## 4. Masked fields
+## 4. Soil layers — a mapping, not an identity
+
+The land-surface scheme (RUC) carries **6 soil levels**, point values at depths **0, 5, 20, 40,
+160 and 300 cm**. ERA5 instead uses **4 layers**, averages over **0-7, 7-28, 28-100 and 100-289
+cm**. The two are not the same object, and the ERA5 names are used for the nearest thing we
+have:
+
+| ERA5 field | ERA5 layer | written from | RUC depth |
+|---|---|---|---|
+| `swvl1` / `stl1` | 0-7 cm | RUC level 1 | 0 cm |
+| `swvl2` / `stl2` | 7-28 cm | RUC level 2 | 5 cm |
+| `swvl3` / `stl3` | 28-100 cm | RUC level 3 | 20 cm |
+| `swvl4` / `stl4` | 100-289 cm | RUC level 4 | 40 cm |
+
+The two deepest RUC levels (160 and 300 cm) have no ERA5 counterpart and are not written. Note
+that the deeper the layer, the worse the correspondence: `swvl4`/`stl4` carry a value from 40 cm
+under a name that in ERA5 means 1-2.9 m.
+
+In the table below these fields appear as **surface**: that is the GRIB level type, and it is
+ERA5's own convention — the layer is identified by the paramId, not by the level, exactly as in
+MARS (`levtype=sfc`). The same holds for every other single-level field.
+
+## 5. Masked fields
 
 Written with a GRIB bitmap rather than fake zeros, so missing means missing:
 
@@ -58,7 +80,7 @@ Written with a GRIB bitmap rather than fake zeros, so missing means missing:
 | `tsn` | cells whose snow cover exceeds 0.9 (≈ 29 mm water equivalent); out of season the field is legitimately empty |
 | `fal` | daytime only (incoming shortwave above 50 W/m²) |
 
-## 5. What is not in the archive
+## 6. What is not in the archive
 
 No TKE and no boundary-layer height (the PBL scheme is YSU, non-local); no ocean waves,
 currents, sea surface height or sea-ice thickness (no ocean or wave coupling); no convective
@@ -66,9 +88,11 @@ precipitation (`CU_PHYSICS=0`, so it is identically zero and would be a dead fie
 fractional land cover (only the dominant category survives). The full reasoning, and the routes
 by which some of it could still be obtained, is in `MISSING_VARIABLES.pdf`.
 
-## 6. The variables
+## 7. The variables
 
-Descriptions and units are the ECMWF ones. "Time" says how the field is sampled.
+Descriptions and units are the ECMWF ones. "Time" says how the field is sampled. There are 90
+rows and 89 distinct shortNames, because `z` is written twice: as geopotential on the pressure
+levels and as the surface geopotential (orography).
 
 ### Pressure levels (13) — 13 variables, 169 messages
 

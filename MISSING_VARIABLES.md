@@ -51,7 +51,6 @@ The archive is produced from hourly WRF 4.1.1 output (domain d02, Mercator, 1641
 | `ICLOUD` | 1 (Xu-Randall) | cloud fraction is **continuous**, not a 0/1 flag — see §5 |
 | `SF_SURFACE_PHYSICS` | 3 (RUC) | 6 soil levels at 0, 5, 20, 40, 160, 300 cm (ERA5 uses 4 layers) |
 | `SF_LAKE_PHYSICS`, `SF_URBAN_PHYSICS` | 0, 0 | no lake model, no urban canopy |
-| `ICLOUD` | 1 | the cloud fraction field is **binary 0/1**, not fractional |
 
 A separate point worth making explicitly: some fields are present in the files but are
 **identically zero on every timestep we sampled**, and are therefore not usable. These are
