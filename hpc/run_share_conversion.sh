@@ -1,10 +1,13 @@
 #!/bin/bash
 #
-# Detached sequence that converts the wrfout staged in wrfout_share to GRIB,
-# 2024 window first, then 2019, KEEPING the wrfout and never queueing more than
-# 48 convert jobs (two days of reanalysis) at a time.
+# Detached sequence that converts every wrfout still on local disk to GRIB:
+# wrfout_share 2024, then wrfout_share 2019, then the March 2024 block staged in
+# wrfout_2024fill (4380 hours in all). It KEEPS every wrfout -- wrfout_share is
+# still to be copied by a colleague, and nothing is deleted until asked -- and
+# never queues more than 48 convert jobs (two days of reanalysis) at a time.
 #
-# Per window:
+# Per window (the "chain name" is the first field of WINDOWS and prefixes every
+# per-chain file: <name>_conv_status.log, <name>_conv_driver.log, <name>_conv.stop):
 #   1. launch the step pipeline (hpc/submit_step_pipeline.py) with keep_wrfout and the
 #      queue gate -- unless a chain for that window is already alive (then just wait)
 #   2. wait for "Window complete" in its driver log and an empty conv_* queue;
@@ -30,10 +33,14 @@ DEAD_MINUTES=60
 POLL_SECONDS=300
 SANITY_ACCOUNT=aifpt_ailamit_0
 
-# name  start_date  end_date  months-for-sanity
+# chain-name  start_date  end_date  months-for-sanity  wrfout-subdir
+# The chain name is only an identifier for the per-window ledger/driver/stop
+# triplet; it must not collide with an older chain, whose stop flag would kill
+# this one on sight (that is why March is share2024mar, not fill2024_p3_mar).
 WINDOWS=(
-    "2024 2024-06-18 2024-09-12 2024-06,2024-07,2024-08,2024-09"
-    "2019 2019-06-17 2019-09-06 2019-06,2019-07,2019-08,2019-09"
+    "share2024    2024-06-18 2024-09-12 2024-06,2024-07,2024-08,2024-09 wrfout_share"
+    "share2019    2019-06-17 2019-09-06 2019-06,2019-07,2019-08,2019-09 wrfout_share"
+    "share2024mar 2024-03-18 2024-03-31 2024-03                         wrfout_2024fill"
 )
 
 # ---- self-detach from a snapshot --------------------------------------------
@@ -63,29 +70,29 @@ check_stop() {
 }
 
 pipeline_args() {
-    local y="$1" start="$2" end="$3"
+    local y="$1" start="$2" end="$3" wdir="$4"
     echo "window.start_date=${start} window.start_hour=0 window.end_date=${end} window.end_hour=23" \
-         "paths.wrfout_dir=${W}/wrfout_share pipeline.keep_wrfout=true" \
+         "paths.wrfout_dir=${W}/${wdir} pipeline.keep_wrfout=true" \
          "batch.size=${MAX_QUEUED} batch.max_queued_converts=${MAX_QUEUED}" \
-         "paths.status_log=${LOG_DIR}/share${y}_conv_status.log" \
-         "paths.driver_log=${LOG_DIR}/share${y}_conv_driver.log" \
-         "paths.stop_flag=${LOG_DIR}/share${y}_conv.stop"
+         "paths.status_log=${LOG_DIR}/${y}_conv_status.log" \
+         "paths.driver_log=${LOG_DIR}/${y}_conv_driver.log" \
+         "paths.stop_flag=${LOG_DIR}/${y}_conv.stop"
 }
 
 log "START | sequence on $(hostname), pid $$"
 cd "$PROJECT_DIR" || { log "FATAL | cannot cd ${PROJECT_DIR}"; exit 1; }
 
 for win in "${WINDOWS[@]}"; do
-    read -r y start end months <<<"$win"
+    read -r y start end months wdir <<<"$win"
     check_stop
-    dlog="${LOG_DIR}/share${y}_conv_driver.log"
-    ystop="${LOG_DIR}/share${y}_conv.stop"
+    dlog="${LOG_DIR}/${y}_conv_driver.log"
+    ystop="${LOG_DIR}/${y}_conv.stop"
     if [ -e "$ystop" ]; then
         log "STOPPED | ${ystop} present; not launching ${y}, exiting."
         exit 0
     fi
     # shellcheck disable=SC2046
-    args=( $(pipeline_args "$y" "$start" "$end") )
+    args=( $(pipeline_args "$y" "$start" "$end" "$wdir") )
 
     # Only the driver-log bytes written after this point count as "this run".
     touch "$dlog"
@@ -95,7 +102,7 @@ for win in "${WINDOWS[@]}"; do
         log "WAIT | ${y}: a chain is already alive (driver log fresh); not launching a second one"
         offset=1
     else
-        log "LAUNCH | ${y}: ${start}..${end} keep_wrfout, <=${MAX_QUEUED} queued"
+        log "LAUNCH | ${y}: ${start}..${end} from ${wdir}, keep_wrfout, <=${MAX_QUEUED} queued"
         if ! "$UV" run python hpc/submit_step_pipeline.py "${args[@]}"; then
             log "FATAL | ${y}: launcher failed; exiting (re-run this script to retry)"
             exit 1
@@ -128,15 +135,15 @@ for win in "${WINDOWS[@]}"; do
 
     # 3. report + sanity
     "$UV" run python hpc/submit_step_pipeline.py "${args[@]}" report=true \
-        > "${LOG_DIR}/share${y}_conv_report.txt" 2>&1
-    log "REPORT | ${y}: $(grep '^# summary' "${LOG_DIR}/share${y}_conv_report.txt")"
-    log "WRFOUT_COUNT | ${y}: $(find "${W}/wrfout_share" -name "wrfout_d02_${y}-*" | wc -l) files in wrfout_share"
+        > "${LOG_DIR}/${y}_conv_report.txt" 2>&1
+    log "REPORT | ${y}: $(grep '^# summary' "${LOG_DIR}/${y}_conv_report.txt")"
+    log "WRFOUT_COUNT | ${y}: $(find "${W}/${wdir}" -name "wrfout_d02_${start:0:4}-*" | wc -l) files left in ${wdir}"
 
     month_args=""
     for m in ${months//,/ }; do month_args+=" --month ${m}"; done
     jid=$(sbatch --parsable --partition dcgp_usr_prod --account "$SANITY_ACCOUNT" \
         --nodes 1 --ntasks 1 --cpus-per-task 1 --mem 8G --time 06:00:00 \
-        --job-name "sanity_share${y}" --output "${LOG_DIR}/share${y}_sanity_%j.out" \
+        --job-name "sanity_${y}" --output "${LOG_DIR}/${y}_sanity_%j.out" \
         --wrap "cd ${PROJECT_DIR}
 module load eccodes/2.34.0--gcc--12.2.0 2>/dev/null
 GCC12_RT=/leonardo/prod/spack/06/install/0.22/linux-rhel8-icelake/gcc-12.2.0/gcc-runtime-12.2.0-dqfwf7yjtbtdzllj66jx6suk34ir2ct3/lib
@@ -144,7 +151,7 @@ ECCODES_LIB=/leonardo/prod/spack/06/install/0.22/linux-rhel8-icelake/gcc-12.2.0/
 export LD_PRELOAD=\$GCC12_RT/libstdc++.so.6
 export LD_LIBRARY_PATH=\$GCC12_RT:\$ECCODES_LIB:\${LD_LIBRARY_PATH:-}
 ${UV} run python hpc/check_grib_sanity.py${month_args}")
-    log "SANITY_SUBMITTED | ${y}: job ${jid:-FAILED} -> ${LOG_DIR}/share${y}_sanity_${jid}.out"
+    log "SANITY_SUBMITTED | ${y}: job ${jid:-FAILED} -> ${LOG_DIR}/${y}_sanity_${jid}.out"
 done
 
 log "DONE | all windows processed"

@@ -40,7 +40,10 @@ for _info in WRF_TO_ECMWF_PARAMID.values():
     EXPECTED[_info['shortName']] += len(_info['levels'])
 
 # Fields that are invariant in time and can never be all-zero over the domain.
-STATIC = {'lsm', 'z', 'sdor', 'slor', 'skt', 'tvl', 'slt', 'cvl'}
+# (Not snowc, tsn, fal or ci: those are legitimately empty out of season or at
+# night. cvh/tvh/lai_hv cover ~20% of the land, which is never zero everywhere.)
+STATIC = {'lsm', 'z', 'sdor', 'slor', 'skt', 'slt',
+          'tvl', 'cvl', 'lai_lv', 'tvh', 'cvh', 'lai_hv', 'al'}
 TP_MARK = 128
 
 

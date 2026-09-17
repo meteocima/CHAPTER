@@ -33,12 +33,18 @@ import numpy as np
 # older sidecars incomplete, and those days have to be re-extracted from their
 # 00Z wrfout (accum_ref.py extract).
 ACCUMULATED_VARS = [
-    'RAINNC', 'RAINC',                      # precipitation (RAINC is 0: CU off)
+    'RAINNC',                               # precipitation (RAINC is identically 0: CU off)
     'SNOWNC', 'GRAUPELNC',                  # needed by tp's rain-only sibling, tirf
-    'ACSWDNB', 'ACLWDNB',                   # downward SW/LW at the surface
-    'ACSWDNT', 'ACSWUPT',                   # top of atmosphere, for tsr
     'SFROFF', 'UDROFF',                     # runoff (monotone; ACSNOM is not, see the registry)
-    'ACHFX', 'ACLHF',                       # identically zero in this run; kept for completeness
+    # Radiation. All-sky and clear-sky, surface and top of atmosphere, both
+    # directions: they feed ssrd/strd/ssrdc/strdc/tisr directly and
+    # ssr/str/ssrc/strc/tsr/tsrc/ttr/ttrc as downward-minus-upward differences.
+    'ACSWDNB', 'ACSWUPB', 'ACLWDNB', 'ACLWUPB',
+    'ACSWDNBC', 'ACSWUPBC', 'ACLWDNBC', 'ACLWUPBC',
+    'ACSWDNT', 'ACSWUPT', 'ACLWUPT',
+    'ACSWDNTC', 'ACSWUPTC', 'ACLWUPTC',
+    # ACLWDNT is not here: downward longwave at the top of the atmosphere is
+    # identically zero. ACHFX/ACLHF are not here either: identically zero too.
 ]
 
 # Marker on messages holding a 00Z-referred accumulation (the GRIB sample

@@ -14,6 +14,12 @@ GRIB2 rather than GRIB1: several of the required parameters (2r, tirf, mucape,
 mucin, wz) have no GRIB1 representation at all, and GRIB1 cannot declare the
 spherical earth WRF integrates on -- doing so removes a ~1.1 km geolocation
 error at the northern edge of the domain.
+
+Adding a field is a registry entry plus, if it is derived, one block here. A
+native wrfout variable needs no code at all: the pass-through loop below already
+knows how to interpolate it to the pressure levels and how to refer an
+accumulator to 00Z. A derived accumulator needs its native dependencies listed
+in ACCUM_DEPS as well, or its 00Z reference will not be loaded.
 """
 
 import argparse
@@ -42,16 +48,43 @@ UNIT_SCALE = {
     'HGT': G,           # m -> m^2/s^2
     'SNOW': 1e-3,       # kg/m^2 -> m of water equivalent
     'CANWAT': 1e-3,     # kg/m^2 -> m of water equivalent
-    'VEGFRA': 1e-2,     # %      -> (0-1)
     'RAINNC': 1e-3,     # mm     -> m
     'SNOWNC': 1e-3,     # mm     -> m
     'SFROFF': 1e-3,     # mm     -> m
     'UDROFF': 1e-3,     # mm     -> m
     'ACSNOM': 1e-3,     # kg/m^2 -> m of water equivalent
+    'SNOWC': 100.0,     # (0-1)  -> % (ERA5 reports snow cover in per cent)
 }
 
 # Cloud bands, as fractions of surface pressure (ECMWF convention).
 CLOUD_BANDS = {'lcc': (1.00, 0.80), 'mcc': (0.80, 0.45), 'hcc': (0.45, 0.00)}
+
+# Net radiation, ECMWF sign convention: downward minus upward. There is no
+# downward longwave at the top of the atmosphere (ACLWDNT is identically zero),
+# so ttr/ttrc are just minus the upward flux and come out negative.
+NET_RADIATION = {
+    'ssr':  ('ACSWDNB', 'ACSWUPB'),    'ssrc': ('ACSWDNBC', 'ACSWUPBC'),
+    'str':  ('ACLWDNB', 'ACLWUPB'),    'strc': ('ACLWDNBC', 'ACLWUPBC'),
+    'tsr':  ('ACSWDNT', 'ACSWUPT'),    'tsrc': ('ACSWDNTC', 'ACSWUPTC'),
+    'ttr':  (None, 'ACLWUPT'),         'ttrc': (None, 'ACLWUPTC'),
+}
+
+# Accumulated fields that are a combination of native accumulators: which native
+# names their 00Z reference has to carry. Anything not listed references itself.
+# Every name here must also be in accum_ref.ACCUMULATED_VARS, or the sidecar will
+# not hold it and the conversion will abort.
+ACCUM_DEPS = {
+    'tirf': ('RAINNC', 'SNOWNC', 'GRAUPELNC'),
+    'ro':   ('SFROFF', 'UDROFF'),
+    **{k: tuple(n for n in pair if n) for k, pair in NET_RADIATION.items()},
+}
+
+# Dominant vegetation category -> ERA5's high/low vegetation split, by the
+# vegetation top height ZTOPV of VEGPARM.TBL, section MODIFIED_IGBP_MODIS_NOAH
+# (the run's MMINLU). High = ZTOPV >= 10 m. Categories 13 (urban), 15 (snow and
+# ice), 16 (barren), 17 (water) and 21 (lake) are neither, and get zero in both.
+VEG_HIGH = frozenset({1, 2, 3, 4, 5, 18})
+VEG_LOW = frozenset({6, 7, 8, 9, 10, 11, 12, 14, 19, 20})
 
 
 def parse_args():
@@ -223,11 +256,10 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
     # rather than silently produce run-init-referred accumulations.
     accum_keys = [k for k, v in WRF_TO_ECMWF_PARAMID.items()
                   if v.get('stepType') == 'accum' and (not debug_vars or k in debug_vars)]
-    # tirf and tsr are combinations, so ask for the native fields they need.
+    # Some are combinations, so ask for the native fields they need.
     needed = set()
     for k in accum_keys:
-        needed.update({'tirf': ('RAINNC', 'SNOWNC', 'GRAUPELNC'),
-                       'tsr': ('ACSWDNT', 'ACSWUPT')}.get(k, (k,)))
+        needed.update(ACCUM_DEPS.get(k, (k,)))
     needed = sorted(n for n in needed if n in ncfile.variables)
     accum_00z = {}
     if needed:
@@ -269,8 +301,12 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
                 elif 'south_north_stag' in dims:
                     data = wrf.destagger(data, stagger_dim=-2)
                 values = to_levels(data)
-                if key in ('QCLOUD', 'QICE'):
+                if key in ('QCLOUD', 'QICE', 'QRAIN', 'QSNOW'):
+                    # Advection undershoot leaves ~-1e-6 kg/kg; a mixing ratio
+                    # cannot be negative and ERA5 never publishes one.
                     values = np.maximum(values, 0.0)
+                elif key == 'CLDFRA':
+                    values = np.clip(values, 0.0, 1.0)
                 emit(key, values, "(pressure levels)")
                 continue
 
@@ -352,6 +388,69 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
         except Exception as exc:
             print(f"  rsn: FAILED: {exc}")
 
+    if want('tsn'):
+        try:
+            # SOILT1 is the temperature at the top of the snow/soil column, so it
+            # is a snow temperature only where snow actually covers the cell.
+            # Masking on SNOW > 0 is too loose: at patchy-snow points SOILT1 is
+            # the blended surface temperature and reaches 296 K in July (25% of
+            # those points above 275 K). Requiring the snow to cover most of the
+            # cell gives 273.15-280.6 K in July and 254.9-282.1 K in March, which
+            # is a snow temperature. Everything else is left missing.
+            covered = gv("SNOWC").values > 0.5
+            emit('tsn', np.where(covered, gv("SOILT1").values, np.nan),
+                 f"(snow-covered cells only, {100 * np.mean(covered):.2f}% of the grid)")
+        except Exception as exc:
+            print(f"  tsn: FAILED: {exc}")
+
+    if want('fal'):
+        try:
+            # All-sky albedo from the model's own fluxes. Undefined at night and
+            # numerically unstable at very low sun, so it is written as a bitmap
+            # below 50 W/m^2 of incoming shortwave.
+            down = gv("SWDNB").values
+            lit = down > 50.0
+            emit('fal', np.where(lit, gv("SWUPB").values / np.where(lit, down, 1.0), np.nan),
+                 f"(daytime only, {100 * np.mean(lit):.0f}% of the domain)")
+        except Exception as exc:
+            print(f"  fal: FAILED: {exc}")
+
+    if want('iews') or want('inss'):
+        try:
+            # Surface stress from similarity theory, the same one that produced
+            # UST: tau = rho u*^2, aligned with the 10 m wind.
+            rho = gv("PSFC").values / (287.05 * gv("T2").values
+                                       * (1.0 + 0.608 * gv("Q2").values))
+            tau = rho * gv("UST").values ** 2
+            u10, v10 = gv("U10").values, gv("V10").values
+            speed = np.hypot(u10, v10)
+            moving = speed > 1e-6
+            safe = np.where(moving, speed, 1.0)
+            if want('iews'):
+                emit('iews', np.where(moving, tau * u10 / safe, 0.0), "(rho u*^2 along U10)")
+            if want('inss'):
+                emit('inss', np.where(moving, tau * v10 / safe, 0.0), "(rho u*^2 along V10)")
+        except Exception as exc:
+            print(f"  iews/inss: FAILED: {exc}")
+
+    veg_keys = ('tvl', 'tvh', 'cvl', 'cvh', 'lai_lv', 'lai_hv')
+    if any(want(k) for k in veg_keys):
+        try:
+            cat = np.asarray(gv("IVGTYP").values, dtype=int)
+            high = np.isin(cat, list(VEG_HIGH))
+            low = np.isin(cat, list(VEG_LOW))
+            cover = gv("VEGFRA").values * 1e-2     # % -> (0-1)
+            lai = gv("LAI").values
+            for key, mask, field, note in (
+                    ('tvl', low, cat, 'low'), ('tvh', high, cat, 'high'),
+                    ('cvl', low, cover, 'low'), ('cvh', high, cover, 'high'),
+                    ('lai_lv', low, lai, 'low'), ('lai_hv', high, lai, 'high')):
+                if want(key):
+                    emit(key, np.where(mask, field, 0.0),
+                         f"({note} vegetation, {100 * np.mean(mask):.1f}% of the grid)")
+        except Exception as exc:
+            print(f"  vegetation: FAILED: {exc}")
+
     # Soil: RUC's first four levels mapped onto the ERA5 layer names.
     for native, prefix in (('SMOIS', 'SMOIS'), ('TSLB', 'TSLB')):
         keys = [f'{prefix}{i}' for i in range(1, 5)]
@@ -372,11 +471,23 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
         except Exception as exc:
             print(f"  tirf: FAILED: {exc}")
 
-    if want('tsr'):
+    if want('ro'):
         try:
-            emit('tsr', since_00z('ACSWDNT') - since_00z('ACSWUPT'), "(net SW at top)")
+            # Both are monotone, so the clip only guards against reference noise.
+            total = since_00z('SFROFF') + since_00z('UDROFF')
+            emit('ro', np.where(total < 0, 0.0, total) * 1e-3, "(surface + sub-surface)")
         except Exception as exc:
-            print(f"  tsr: FAILED: {exc}")
+            print(f"  ro: FAILED: {exc}")
+
+    # Net radiation: downward minus upward, all in J/m^2 already.
+    for key, (down, up) in NET_RADIATION.items():
+        if not want(key):
+            continue
+        try:
+            net = -since_00z(up) if down is None else since_00z(down) - since_00z(up)
+            emit(key, net, f"(net, {down or '0'} - {up})")
+        except Exception as exc:
+            print(f"  {key}: FAILED: {exc}")
 
     if want('mucape') or want('mucin'):
         try:
@@ -427,7 +538,8 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
             print(f"  winds at height: FAILED: {exc}")
 
     # ---------------- column integrals and cloud ----------------------------
-    if want('tcw') or want('tqv'):
+    species_keys = {'QCLOUD': 'tclw', 'QICE': 'tciw', 'QRAIN': 'tcrw', 'QSNOW': 'tcsw'}
+    if want('tcw') or want('tqv') or any(want(k) for k in species_keys.values()):
         try:
             pres_pa = gv("pressure").values * 100.0
             dp = np.abs(np.diff(pres_pa, axis=0))
@@ -441,9 +553,14 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
                     total += gv(name).values
                 emit('tcw', np.sum(total * dp / G, axis=0))
                 del total
+            # Per-species columns, from the same dp. The fields are already in
+            # the cache from tcw, so this costs one reduction each.
+            for name, key in species_keys.items():
+                if want(key):
+                    emit(key, np.sum(np.maximum(gv(name).values, 0.0) * dp / G, axis=0))
             del dp, pres_pa, qv
         except Exception as exc:
-            print(f"  tcw/tqv: FAILED: {exc}")
+            print(f"  column integrals: FAILED: {exc}")
 
     cloud_keys = ('tcc', 'lcc', 'mcc', 'hcc')
     if any(want(k) for k in cloud_keys):

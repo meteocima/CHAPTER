@@ -24,12 +24,25 @@ preceding hour (see accum_ref.py and the writer in convert_to_pressure_levels).
 
 Deliberately NOT produced
 -------------------------
-Fields that are absent from the wrfout, or present but identically zero on
-every sampled timestep, are documented in MISSING_VARIABLES.md together with
-the routes by which some of them could still be obtained. The short list:
-TKE and PBLH (the PBL scheme is YSU, non-local), TSK, HFX/LH (ACHFX/ACLHF are
-identically zero), ALBEDO, LANDUSEF/GREENFRAC/SOILCTOP, and everything to do
-with ocean waves, currents and sea-ice properties (no ocean or wave coupling).
+Fields that are absent from the wrfout, or present but useless, are documented
+in MISSING_VARIABLES.md together with the routes by which some of them could
+still be obtained. The short list:
+
+* not in the run at all: TKE and PBLH (the PBL scheme is YSU, non-local), TSK,
+  HFX/LH, ALBEDO, LANDUSEF/GREENFRAC/SOILCTOP (they live in geo_em_d02, which
+  is irrecoverable -- already requested from LRZ), and everything to do with
+  ocean waves, currents and sea-ice properties (no ocean or wave coupling);
+* present but identically zero on every sampled timestep: ACHFX, ACLHF,
+  ACGRDFLX, NOAHRES, SSTSK, SST_INPUT, SWNORM, ACSNOW, HAILNC, ACLWDNT, and --
+  because CU_PHYSICS=0 -- RAINC/RAINSH/PREC_ACC_C, hence no `cp` and no `csf`;
+* present and alive but with no ERA5 parameter: QGRAUP (no graupel in ERA5),
+  REFL_10CM/REFD_MAX/UP_HELI_MAX/W_UP_MAX/LPI/HAIL_MAX2D, SR, RHOSNF,
+  SNOWFALLAC (snow DEPTH, not water equivalent), Q2, SH2O, TMN, SHDMAX/SHDMIN;
+* redundant: ACRUNOFF (verified identical to SFROFF, not the total), `lsp`
+  (identical to tp since RAINC is zero), `cl` (every lake point is already
+  water in lsm), SNOALB (an annual climatological cap, not ERA5's `asn`);
+* excluded by decision: the gust components 10efg/10nfg (only a resolved-wind
+  maximum exists, so their direction would be an assumption).
 """
 
 # Pressure levels shared with convert_to_pressure_levels.PRESSURE_LEVELS.
@@ -38,6 +51,9 @@ PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 
 _PL = dict(levelType='isobaricInhPa', levels=PRESSURE_LEVELS)
 _SFC = dict(levelType='surface', levels=[0])
 _ATM = dict(levelType='entireAtmosphere', levels=[0])
+# Top of atmosphere: leave the level alone so eccodes applies the `nominalTop`
+# that the parameter definition prescribes (tsr, ttr, tisr, tsrc, ttrc).
+_TOP = dict(levelType=None, levels=[None])
 
 
 def _h(z):
@@ -59,6 +75,11 @@ WRF_TO_ECMWF_PARAMID = {
     # Both vertical-velocity conventions: omega in Pa/s and the geometric w in m/s.
     'omega':  {'shortName': 'w',    'paramId': 135,    'long_name': 'Vertical velocity (pressure)', 'units': 'Pa/s', **_PL},
     'wa':     {'shortName': 'wz',   'paramId': 260238, 'long_name': 'Geometric vertical velocity', 'units': 'm/s', **_PL},
+    # CLDFRA is a FRACTIONAL cloud field (ICLOUD=1 is Xu-Randall): measured, only
+    # 18-22% of cloudy points sit exactly at 1, the rest spread over 0-1.
+    'CLDFRA': {'shortName': 'cc',   'paramId': 248,    'long_name': 'Fraction of cloud cover', 'units': '(0-1)', **_PL},
+    'QRAIN':  {'shortName': 'crwc', 'paramId': 75,     'long_name': 'Specific rain water content', 'units': 'kg/kg', **_PL},
+    'QSNOW':  {'shortName': 'cswc', 'paramId': 76,     'long_name': 'Specific snow water content', 'units': 'kg/kg', **_PL},
 
     # ---------------- 2 m ----------------
     'T2':     {'shortName': '2t',   'paramId': 167,    'long_name': '2m temperature', 'units': 'K', **_h(2)},
@@ -82,6 +103,12 @@ WRF_TO_ECMWF_PARAMID = {
     'slp':    {'shortName': 'msl',  'paramId': 151,    'long_name': 'Mean sea level pressure', 'units': 'Pa', 'levelType': 'meanSea', 'levels': [0]},
     'tcw':    {'shortName': 'tcw',  'paramId': 136,    'long_name': 'Total column water', 'units': 'kg/m^2', **_ATM},
     'tqv':    {'shortName': 'tcwv', 'paramId': 137,    'long_name': 'Total column water vapour', 'units': 'kg/m^2', **_ATM},
+    # Per-species column integrals, from the same dp the tcw block already builds.
+    # Graupel has no ERA5 parameter, so QGRAUP enters tcw but is not written alone.
+    'tclw':   {'shortName': 'tclw', 'paramId': 78,     'long_name': 'Total column cloud liquid water', 'units': 'kg/m^2', **_ATM},
+    'tciw':   {'shortName': 'tciw', 'paramId': 79,     'long_name': 'Total column cloud ice water', 'units': 'kg/m^2', **_ATM},
+    'tcrw':   {'shortName': 'tcrw', 'paramId': 228089, 'long_name': 'Total column rain water', 'units': 'kg/m^2', **_ATM},
+    'tcsw':   {'shortName': 'tcsw', 'paramId': 228090, 'long_name': 'Total column snow water', 'units': 'kg/m^2', **_ATM},
     'tcc':    {'shortName': 'tcc',  'paramId': 164,    'long_name': 'Total cloud cover', 'units': '(0-1)', **_ATM},
     'hcc':    {'shortName': 'hcc',  'paramId': 188,    'long_name': 'High cloud cover', 'units': '(0-1)', **_ATM},
     'mcc':    {'shortName': 'mcc',  'paramId': 187,    'long_name': 'Medium cloud cover', 'units': '(0-1)', **_ATM},
@@ -103,14 +130,34 @@ WRF_TO_ECMWF_PARAMID = {
     'SEAICE':   {'shortName': 'ci',   'paramId': 31,     'long_name': 'Sea ice area fraction', 'units': '(0-1)', **_SFC},
 
     # ---------------- land surface (ERA5 names for the fields we have) ----------------
-    'IVGTYP':  {'shortName': 'tvl',    'paramId': 29,     'long_name': 'Type of low vegetation (WRF dominant category)', 'units': 'category', **_SFC},
+    # Vegetation is split into ERA5's high/low pair by the dominant category's
+    # vegetation-top height (ZTOPV in VEGPARM.TBL, MODIFIED_IGBP_MODIS_NOAH):
+    # see VEG_HIGH/VEG_LOW in convert_to_pressure_levels.py. The category CODES
+    # in tvl/tvh stay MODIS-IGBP, they are not ECMWF's TESSEL types.
+    'tvl':     {'shortName': 'tvl',    'paramId': 29,     'long_name': 'Type of low vegetation (WRF/MODIS dominant category)', 'units': 'category', **_SFC},
+    'tvh':     {'shortName': 'tvh',    'paramId': 30,     'long_name': 'Type of high vegetation (WRF/MODIS dominant category)', 'units': 'category', **_SFC},
     'ISLTYP':  {'shortName': 'slt',    'paramId': 43,     'long_name': 'Soil type (WRF dominant category)', 'units': 'category', **_SFC},
-    'VEGFRA':  {'shortName': 'cvl',    'paramId': 27,     'long_name': 'Low vegetation cover', 'units': '(0-1)', **_SFC},
-    'LAI':     {'shortName': 'lai_lv', 'paramId': 66,     'long_name': 'Leaf area index, low vegetation', 'units': 'm^2/m^2', **_SFC},
+    'cvl':     {'shortName': 'cvl',    'paramId': 27,     'long_name': 'Low vegetation cover', 'units': '(0-1)', **_SFC},
+    'cvh':     {'shortName': 'cvh',    'paramId': 28,     'long_name': 'High vegetation cover', 'units': '(0-1)', **_SFC},
+    'lai_lv':  {'shortName': 'lai_lv', 'paramId': 66,     'long_name': 'Leaf area index, low vegetation', 'units': 'm^2/m^2', **_SFC},
+    'lai_hv':  {'shortName': 'lai_hv', 'paramId': 67,     'long_name': 'Leaf area index, high vegetation', 'units': 'm^2/m^2', **_SFC},
+    'ALBBCK':  {'shortName': 'al',     'paramId': 174,    'long_name': 'Albedo (climatological, snow-free background)', 'units': '(0-1)', **_SFC},
+    # Actual all-sky albedo; undefined at night -> written as a bitmap there.
+    'fal':     {'shortName': 'fal',    'paramId': 243,    'long_name': 'Forecast albedo (upward/downward SW at surface)', 'units': '(0-1)', **_SFC},
     'UST':     {'shortName': 'zust',   'paramId': 228003, 'long_name': 'Friction velocity', 'units': 'm/s', **_SFC},
     'ZNT':     {'shortName': 'fsr',    'paramId': 244,    'long_name': 'Forecast surface roughness', 'units': 'm', **_SFC},
+    # tau = rho u*^2, projected on the 10 m wind direction (similarity theory,
+    # the same one WRF used to produce UST). Instantaneous, not time-integrated.
+    'iews':    {'shortName': 'iews',   'paramId': 229,    'long_name': 'Instantaneous eastward turbulent surface stress', 'units': 'N/m^2', **_SFC},
+    'inss':    {'shortName': 'inss',   'paramId': 230,    'long_name': 'Instantaneous northward turbulent surface stress', 'units': 'N/m^2', **_SFC},
     'SNOW':    {'shortName': 'sd',     'paramId': 141,    'long_name': 'Snow depth (water equivalent)', 'units': 'm', **_SFC},
     'rsn':     {'shortName': 'rsn',    'paramId': 33,     'long_name': 'Snow density', 'units': 'kg/m^3', **_SFC},
+    # SNOWC is described as a flag but is continuous (measured 267824 distinct
+    # values); ERA5 reports snow cover in per cent, hence UNIT_SCALE 100.
+    'SNOWC':   {'shortName': 'snowc',  'paramId': 260038, 'long_name': 'Snow cover', 'units': '%', **_SFC},
+    # SOILT1 is the temperature at the top of the snow/soil column; it is only a
+    # snow temperature where there is snow, so it is masked to SNOW > 0.
+    'tsn':     {'shortName': 'tsn',    'paramId': 238,    'long_name': 'Temperature of snow layer', 'units': 'K', **_SFC},
     'CANWAT':  {'shortName': 'src',    'paramId': 198,    'long_name': 'Skin reservoir content', 'units': 'm', **_SFC},
     # RUC has 6 soil levels (0, 5, 20, 40, 160, 300 cm); ERA5 has 4 layers. The
     # first four are mapped 1:1 -- an approximation, see MISSING_VARIABLES.md --
@@ -128,11 +175,29 @@ WRF_TO_ECMWF_PARAMID = {
     'RAINNC':  {'shortName': 'tp',   'paramId': 228,    'long_name': 'Total precipitation', 'units': 'm', 'stepType': 'accum', **_SFC},
     'tirf':    {'shortName': 'tirf', 'paramId': 235015, 'long_name': 'Time integral of rain flux (rain only)', 'units': 'kg/m^2', 'stepType': 'accum', **_SFC},
     'SNOWNC':  {'shortName': 'sf',   'paramId': 144,    'long_name': 'Snowfall (water equivalent)', 'units': 'm', 'stepType': 'accum', **_SFC},
-    'ACSWDNB': {'shortName': 'ssrd', 'paramId': 169,    'long_name': 'Surface solar radiation downwards', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
-    # tsr sits on nominalTop by definition -> levelType None.
-    'tsr':     {'shortName': 'tsr',  'paramId': 178,    'long_name': 'Top net solar radiation', 'units': 'J/m^2', 'stepType': 'accum', 'levelType': None, 'levels': [None]},
     'SFROFF':  {'shortName': 'sro',  'paramId': 8,      'long_name': 'Surface runoff', 'units': 'm', 'stepType': 'accum', **_SFC},
     'UDROFF':  {'shortName': 'ssro', 'paramId': 9,      'long_name': 'Sub-surface runoff', 'units': 'm', 'stepType': 'accum', **_SFC},
+    'ro':      {'shortName': 'ro',   'paramId': 205,    'long_name': 'Runoff (surface + sub-surface)', 'units': 'm', 'stepType': 'accum', **_SFC},
+
+    # ---------------- radiation, accumulated since 00Z --------------------------
+    # Every one of these is monotone within a run (verified on March and July,
+    # five hours each), so referring them to 00Z is sound. ECMWF sign convention:
+    # a net flux is downward minus upward, so ttr/ttrc come out negative.
+    # Downward (native, straight through the accumulated branch):
+    'ACSWDNB':  {'shortName': 'ssrd',  'paramId': 169,    'long_name': 'Surface solar radiation downwards', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
+    'ACLWDNB':  {'shortName': 'strd',  'paramId': 175,    'long_name': 'Surface thermal radiation downwards', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
+    'ACSWDNBC': {'shortName': 'ssrdc', 'paramId': 228129, 'long_name': 'Surface solar radiation downwards, clear sky', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
+    'ACLWDNBC': {'shortName': 'strdc', 'paramId': 228130, 'long_name': 'Surface thermal radiation downwards, clear sky', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
+    'ACSWDNT':  {'shortName': 'tisr',  'paramId': 212,    'long_name': 'TOA incident solar radiation', 'units': 'J/m^2', 'stepType': 'accum', **_TOP},
+    # Net (derived: downward minus upward):
+    'ssr':      {'shortName': 'ssr',   'paramId': 176,    'long_name': 'Surface net solar radiation', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
+    'str':      {'shortName': 'str',   'paramId': 177,    'long_name': 'Surface net thermal radiation', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
+    'ssrc':     {'shortName': 'ssrc',  'paramId': 210,    'long_name': 'Surface net solar radiation, clear sky', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
+    'strc':     {'shortName': 'strc',  'paramId': 211,    'long_name': 'Surface net thermal radiation, clear sky', 'units': 'J/m^2', 'stepType': 'accum', **_SFC},
+    'tsr':      {'shortName': 'tsr',   'paramId': 178,    'long_name': 'Top net solar radiation', 'units': 'J/m^2', 'stepType': 'accum', **_TOP},
+    'tsrc':     {'shortName': 'tsrc',  'paramId': 208,    'long_name': 'Top net solar radiation, clear sky', 'units': 'J/m^2', 'stepType': 'accum', **_TOP},
+    'ttr':      {'shortName': 'ttr',   'paramId': 179,    'long_name': 'Top net thermal radiation', 'units': 'J/m^2', 'stepType': 'accum', **_TOP},
+    'ttrc':     {'shortName': 'ttrc',  'paramId': 209,    'long_name': 'Top net thermal radiation, clear sky', 'units': 'J/m^2', 'stepType': 'accum', **_TOP},
     # ACSNOM ('smlt') is deliberately absent: it is NOT a monotone run-init
     # accumulator -- individual points drop back to zero within a run (measured
     # -7.26 mm against 00Z on 2024-07-01), so referring it to 00Z would publish

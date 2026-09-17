@@ -2,7 +2,7 @@
 
 > **STORICO (2026-06).** Descrive lo schema a 21 variabili / 93 messaggi in GRIB1, quando il
 > riferimento era la colonna "USED" di MeteoSwiss. Dal 2026-09 lo schema è molto più ampio
-> (63 variabili / 183 messaggi, GRIB2): la lista autorevole è il dict
+> (90 variabili / 246 messaggi, GRIB2): la lista autorevole è il dict
 > `WRF_TO_ECMWF_PARAMID` in `wrf_era5_comparison.py`, e ciò che NON si può produrre è in
 > `MISSING_VARIABLES.md`. Le variabili elencate qui sotto come "disabilitate" sono quasi
 > tutte state riattivate. Il documento resta per la tracciabilità della scelta del 2026-06.
