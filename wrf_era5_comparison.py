@@ -124,23 +124,24 @@ WRF_TO_ECMWF_PARAMID = {
     'LANDMASK': {'shortName': 'lsm',  'paramId': 172,    'long_name': 'Land-sea mask', 'units': '(0-1)', **_SFC},
     'PSFC':     {'shortName': 'sp',   'paramId': 134,    'long_name': 'Surface pressure', 'units': 'Pa', **_SFC},
     'VAR_SSO':  {'shortName': 'sdor', 'paramId': 160,    'long_name': 'Standard deviation of orography', 'units': 'm', **_SFC},
-    'slor':     {'shortName': 'slor', 'paramId': 163,    'long_name': 'Slope of sub-gridscale orography', 'units': 'Numeric', **_SFC},
-    'skt':      {'shortName': 'skt',  'paramId': 235,    'long_name': 'Skin temperature (from upward longwave)', 'units': 'K', **_SFC},
+    # DECLARED APPROXIMATION: ERA5's slor is the slope of the SUB-GRID orography,
+    # a parameter of the form-drag scheme derived from a finer dataset inside the
+    # box. What we write is |grad HGT| of the RESOLVED 3 km terrain. At 3 km the
+    # two are close in spirit but they are not the same quantity; kept, declared.
+    'slor':     {'shortName': 'slor', 'paramId': 163,    'long_name': 'Slope of orography (resolved, 3 km)', 'units': 'Numeric', **_SFC},
+    'skt':      {'shortName': 'skt',  'paramId': 235,    'long_name': 'Skin temperature (inverted from upward longwave)', 'units': 'K', **_SFC},
     'SST':      {'shortName': 'sst',  'paramId': 34,     'long_name': 'Sea surface temperature', 'units': 'K', **_SFC},
     'SEAICE':   {'shortName': 'ci',   'paramId': 31,     'long_name': 'Sea ice area fraction', 'units': '(0-1)', **_SFC},
 
     # ---------------- land surface (ERA5 names for the fields we have) ----------------
-    # Vegetation is split into ERA5's high/low pair by the dominant category's
-    # vegetation-top height (ZTOPV in VEGPARM.TBL, MODIFIED_IGBP_MODIS_NOAH):
-    # see VEG_HIGH/VEG_LOW in convert_to_pressure_levels.py. The category CODES
-    # in tvl/tvh stay MODIS-IGBP, they are not ECMWF's TESSEL types.
-    'tvl':     {'shortName': 'tvl',    'paramId': 29,     'long_name': 'Type of low vegetation (WRF/MODIS dominant category)', 'units': 'category', **_SFC},
-    'tvh':     {'shortName': 'tvh',    'paramId': 30,     'long_name': 'Type of high vegetation (WRF/MODIS dominant category)', 'units': 'category', **_SFC},
-    'ISLTYP':  {'shortName': 'slt',    'paramId': 43,     'long_name': 'Soil type (WRF dominant category)', 'units': 'category', **_SFC},
-    'cvl':     {'shortName': 'cvl',    'paramId': 27,     'long_name': 'Low vegetation cover', 'units': '(0-1)', **_SFC},
-    'cvh':     {'shortName': 'cvh',    'paramId': 28,     'long_name': 'High vegetation cover', 'units': '(0-1)', **_SFC},
-    'lai_lv':  {'shortName': 'lai_lv', 'paramId': 66,     'long_name': 'Leaf area index, low vegetation', 'units': 'm^2/m^2', **_SFC},
-    'lai_hv':  {'shortName': 'lai_hv', 'paramId': 67,     'long_name': 'Leaf area index, high vegetation', 'units': 'm^2/m^2', **_SFC},
+    # NOT produced: tvl, tvh, slt, cvl, cvh, lai_lv, lai_hv.
+    # tvl/tvh/slt would carry WRF's MODIS-IGBP and STATSGO category numbers under
+    # paramIds whose code tables are ECMWF's own: code 1 means "crops" to a reader
+    # of table 4.234 and "evergreen needleleaf forest" to us. cvl/cvh/lai_lv/lai_hv
+    # all rest on the same assumption -- one dominant category per cell -- while
+    # ERA5 lets low and high vegetation coexist, and VEGFRA is a seasonal GREEN
+    # fraction, not a static cover fraction. Dropped (decision 2026-09-17).
+
     'ALBBCK':  {'shortName': 'al',     'paramId': 174,    'long_name': 'Albedo (climatological, snow-free background)', 'units': '(0-1)', **_SFC},
     # Actual all-sky albedo; undefined at night -> written as a bitmap there.
     'fal':     {'shortName': 'fal',    'paramId': 243,    'long_name': 'Forecast albedo (upward/downward SW at surface)', 'units': '(0-1)', **_SFC},
@@ -161,17 +162,11 @@ WRF_TO_ECMWF_PARAMID = {
     # season the message is legitimately empty: summer 2019 has no such point.
     'tsn':     {'shortName': 'tsn',    'paramId': 238,    'long_name': 'Temperature of snow layer', 'units': 'K', **_SFC},
     'CANWAT':  {'shortName': 'src',    'paramId': 198,    'long_name': 'Skin reservoir content', 'units': 'm', **_SFC},
-    # RUC has 6 soil levels (0, 5, 20, 40, 160, 300 cm); ERA5 has 4 layers. The
-    # first four are mapped 1:1 -- an approximation, see MISSING_VARIABLES.md --
-    # and the two deepest RUC levels are not written.
-    'SMOIS1':  {'shortName': 'swvl1',  'paramId': 39,     'long_name': 'Volumetric soil water layer 1', 'units': 'm^3/m^3', **_SFC},
-    'SMOIS2':  {'shortName': 'swvl2',  'paramId': 40,     'long_name': 'Volumetric soil water layer 2', 'units': 'm^3/m^3', **_SFC},
-    'SMOIS3':  {'shortName': 'swvl3',  'paramId': 41,     'long_name': 'Volumetric soil water layer 3', 'units': 'm^3/m^3', **_SFC},
-    'SMOIS4':  {'shortName': 'swvl4',  'paramId': 42,     'long_name': 'Volumetric soil water layer 4', 'units': 'm^3/m^3', **_SFC},
-    'TSLB1':   {'shortName': 'stl1',   'paramId': 139,    'long_name': 'Soil temperature level 1', 'units': 'K', **_SFC},
-    'TSLB2':   {'shortName': 'stl2',   'paramId': 170,    'long_name': 'Soil temperature level 2', 'units': 'K', **_SFC},
-    'TSLB3':   {'shortName': 'stl3',   'paramId': 183,    'long_name': 'Soil temperature level 3', 'units': 'K', **_SFC},
-    'TSLB4':   {'shortName': 'stl4',   'paramId': 236,    'long_name': 'Soil temperature level 4', 'units': 'K', **_SFC},
+    # NOT produced: swvl1-4 / stl1-4. RUC carries point values at 0, 5, 20, 40,
+    # 160 and 300 cm; ERA5's four layers are averages over 0-7, 7-28, 28-100 and
+    # 100-289 cm. Writing the first four RUC levels under the ERA5 names put a
+    # 40 cm value under a name that means 1-2.9 m, and the mismatch grows with
+    # depth, so the whole soil block was dropped (decision 2026-09-17).
 
     # ---------------- accumulated since 00Z of the same day ----------------
     'RAINNC':  {'shortName': 'tp',   'paramId': 228,    'long_name': 'Total precipitation', 'units': 'm', 'stepType': 'accum', **_SFC},

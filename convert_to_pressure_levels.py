@@ -56,6 +56,24 @@ UNIT_SCALE = {
     'SNOWC': 100.0,     # (0-1)  -> % (ERA5 reports snow cover in per cent)
 }
 
+SIGMA = 5.670374419e-8      # W m^-2 K^-4, Stefan-Boltzmann
+
+# Surface emissivity by dominant land-use category: the EMISSMIN column of
+# VEGPARM.TBL, section MODIFIED_IGBP_MODIS_NOAH (this run's MMINLU), indexed by
+# IVGTYP. Hard-coded rather than read at runtime because the table is a WRF
+# static that lives outside this repo. Measured against the two cases where the
+# skin temperature is known (SST over open water, the 0 cm soil level on
+# snow-free land), EMISSMIN beats both a fixed 0.98 and the green-fraction blend
+# between EMISSMIN and EMISSMAX. Index 0 is unused; a category outside 1-20
+# (none measured) is clipped into range.
+LANDUSE_EMISS = np.array([
+    0.98,        # 0  unused
+    0.95, 0.95, 0.93, 0.93, 0.93,   #  1-5  forests
+    0.93, 0.93, 0.93, 0.92, 0.92,   #  6-10 shrubs, savannas, grassland
+    0.95, 0.92, 0.88, 0.92, 0.95,   # 11-15 wetlands, crops, urban, mosaic, snow/ice
+    0.90, 0.98, 0.93, 0.92, 0.90,   # 16-20 barren, water, tundra
+])
+
 # Cloud bands, as fractions of surface pressure (ECMWF convention).
 CLOUD_BANDS = {'lcc': (1.00, 0.80), 'mcc': (0.80, 0.45), 'hcc': (0.45, 0.00)}
 
@@ -78,14 +96,6 @@ ACCUM_DEPS = {
     'ro':   ('SFROFF', 'UDROFF'),
     **{k: tuple(n for n in pair if n) for k, pair in NET_RADIATION.items()},
 }
-
-# Dominant vegetation category -> ERA5's high/low vegetation split, by the
-# vegetation top height ZTOPV of VEGPARM.TBL, section MODIFIED_IGBP_MODIS_NOAH
-# (the run's MMINLU). High = ZTOPV >= 10 m. Categories 13 (urban), 15 (snow and
-# ice), 16 (barren), 17 (water) and 21 (lake) are neither, and get zero in both.
-VEG_HIGH = frozenset({1, 2, 3, 4, 5, 18})
-VEG_LOW = frozenset({6, 7, 8, 9, 10, 11, 12, 14, 19, 20})
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -284,6 +294,22 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
         """Native accumulated field, referred to 00Z of the same day."""
         return np.asarray(ncfile.variables[name][0], dtype=float) - accum_00z[name]
 
+    # WRF's Q* are mixing ratios, per kg of DRY air; every ECMWF water content
+    # (clwc, ciwc, crwc, cswc, and the column integrals) is a SPECIFIC content,
+    # per kg of MOIST air. The conversion is a division by 1 + the total water
+    # mixing ratio. Measured on 2024-07-01T14: 0.8% in the median, 2.2% at most,
+    # always in excess. Computed once on model levels and cached, because the
+    # interpolation to pressure levels is the expensive part.
+    HYDROMETEORS = ("QVAPOR", "QCLOUD", "QRAIN", "QICE", "QSNOW", "QGRAUP")
+    _moist_cache = {}
+
+    def moist_factor(on_levels):
+        """1 / (1 + total water mixing ratio), on model or pressure levels."""
+        if on_levels not in _moist_cache:
+            rtot = sum(np.asarray(gv(n).values, dtype=float) for n in HYDROMETEORS)
+            _moist_cache[on_levels] = 1.0 / (1.0 + (to_levels(rtot) if on_levels else rtot))
+        return _moist_cache[on_levels]
+
     # ---------------- native fields -----------------------------------------
     print("\n=== NATIVE FIELDS ===")
     for key in [k for k in WRF_TO_ECMWF_PARAMID if k in ncfile.variables]:
@@ -305,6 +331,12 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
                     # Advection undershoot leaves ~-1e-6 kg/kg; a mixing ratio
                     # cannot be negative and ERA5 never publishes one.
                     values = np.maximum(values, 0.0)
+                    # WRF carries mixing ratios (per kg of DRY air); clwc/ciwc/
+                    # crwc/cswc are SPECIFIC contents (per kg of moist air), so
+                    # divide by 1 + the total water mixing ratio. Measured: the
+                    # difference is 0.8% in the median and 2.2% at most, always
+                    # in excess, and it is systematic.
+                    values = values * moist_factor(True)
                 elif key == 'CLDFRA':
                     values = np.clip(values, 0.0, 1.0)
                 emit(key, values, "(pressure levels)")
@@ -366,9 +398,22 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
 
     if want('skt'):
         try:
-            # LWUPB = emissivity * sigma * T^4
-            lwupb = gv("LWUPB").values
-            emit('skt', (lwupb / (0.98 * 5.67e-8)) ** 0.25)
+            # TSK was not written out, so the skin temperature is inverted from
+            # the upward longwave. WRF's radiation driver computes
+            #     LWUPB = eps * sigma * T^4 + (1 - eps) * GLW
+            # so BOTH the reflected downward term and a per-point emissivity are
+            # needed. Validated where the answer is known exactly: over open
+            # water WRF's skin temperature IS the SST (no ocean model), and this
+            # inversion recovers it to 0.005 K on every file tested, summer and
+            # March. Dropping the reflected term costs +1.25 K there; a fixed
+            # eps = 0.98 over land costs up to 4 K on low-emissivity surfaces.
+            # Against the 0 cm soil level on snow-free land the RMSE halves
+            # (1.68 -> 0.98 K in July, 1.85 -> 1.03 K in March).
+            lwupb, glw = gv("LWUPB").values, gv("GLW").values
+            cat = np.clip(np.asarray(gv("IVGTYP").values, dtype=int), 1, len(LANDUSE_EMISS) - 1)
+            eps = LANDUSE_EMISS[cat]
+            emit('skt', (np.maximum(lwupb - (1.0 - eps) * glw, 1.0) / (eps * SIGMA)) ** 0.25,
+                 f"(eps {eps.min():.3f}-{eps.max():.3f} by land use, reflected term included)")
         except Exception as exc:
             print(f"  skt: FAILED: {exc}")
 
@@ -436,23 +481,6 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
         except Exception as exc:
             print(f"  iews/inss: FAILED: {exc}")
 
-    veg_keys = ('tvl', 'tvh', 'cvl', 'cvh', 'lai_lv', 'lai_hv')
-    if any(want(k) for k in veg_keys):
-        try:
-            cat = np.asarray(gv("IVGTYP").values, dtype=int)
-            high = np.isin(cat, list(VEG_HIGH))
-            low = np.isin(cat, list(VEG_LOW))
-            cover = gv("VEGFRA").values * 1e-2     # % -> (0-1)
-            lai = gv("LAI").values
-            for key, mask, field, note in (
-                    ('tvl', low, cat, 'low'), ('tvh', high, cat, 'high'),
-                    ('cvl', low, cover, 'low'), ('cvh', high, cover, 'high'),
-                    ('lai_lv', low, lai, 'low'), ('lai_hv', high, lai, 'high')):
-                if want(key):
-                    emit(key, np.where(mask, field, 0.0),
-                         f"({note} vegetation, {100 * np.mean(mask):.1f}% of the grid)")
-        except Exception as exc:
-            print(f"  vegetation: FAILED: {exc}")
 
     # Soil: RUC's first four levels mapped onto the ERA5 layer names.
     for native, prefix in (('SMOIS', 'SMOIS'), ('TSLB', 'TSLB')):
@@ -547,20 +575,23 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
             pres_pa = gv("pressure").values * 100.0
             dp = np.abs(np.diff(pres_pa, axis=0))
             dp = np.concatenate([dp, np.zeros_like(dp[-1:])], axis=0)
-            qv = gv("QVAPOR").values
+            # Same mixing-ratio -> specific-content conversion as on the
+            # pressure levels: the column integral of a specific content.
+            moist = moist_factor(False)
+            qv = gv("QVAPOR").values * moist
             if want('tqv'):
                 emit('tqv', np.sum(qv * dp / G, axis=0))
             if want('tcw'):
                 total = qv.copy()
                 for name in ("QCLOUD", "QRAIN", "QICE", "QSNOW", "QGRAUP"):
-                    total += gv(name).values
+                    total += gv(name).values * moist
                 emit('tcw', np.sum(total * dp / G, axis=0))
                 del total
             # Per-species columns, from the same dp. The fields are already in
             # the cache from tcw, so this costs one reduction each.
             for name, key in species_keys.items():
                 if want(key):
-                    emit(key, np.sum(np.maximum(gv(name).values, 0.0) * dp / G, axis=0))
+                    emit(key, np.sum(np.maximum(gv(name).values, 0.0) * moist * dp / G, axis=0))
             del dp, pres_pa, qv
         except Exception as exc:
             print(f"  column integrals: FAILED: {exc}")

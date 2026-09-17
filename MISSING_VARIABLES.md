@@ -94,6 +94,18 @@ would have come from turned out to be irrecoverable.
 
 ---
 
+Dropped on 2026-09-17 rather than published under a name that would mislead:
+
+| Variable | Why it was dropped |
+|---|---|
+| **Soil moisture and soil temperature** (`swvl1-4`, `stl1-4`) | The land-surface scheme carries point values at 0, 5, 20, 40, 160 and 300 cm; ERA5's four layers are averages over 0-7, 7-28, 28-100 and 100-289 cm. The first four RUC levels under the ERA5 names would put a 40 cm value where the name means 1-2.9 m, and the mismatch grows with depth |
+| **Vegetation and soil type** (`tvl`, `tvh`, `slt`) | The categories are WRF's MODIS-IGBP and STATSGO ones, while those paramIds carry ECMWF's own code tables: code 1 reads as "crops" in table 4.234 and means "evergreen needleleaf forest" here. A translation table could be built, but it would be our invention, not the model's |
+| **Vegetation cover and LAI** (`cvl`, `cvh`, `lai_lv`, `lai_hv`) | All rest on one dominant category per cell, while ERA5 lets low and high vegetation coexist in the same box; and the model's vegetation fraction is a seasonal *green* fraction, not a static cover fraction. The model also carries a single LAI, not one per vegetation class |
+
+If any of these is needed, say so: the underlying WRF fields exist and can be delivered under
+their own names (`SMOIS`, `TSLB`, `IVGTYP`, `ISLTYP`, `VEGFRA`, `LAI`), with their own depths and
+their own code tables, where nothing is being claimed about ERA5 equivalence.
+
 ## 5. Caveats on the variables we *do* provide
 
 These matter for correct use and should be read together with the variable list.
@@ -106,11 +118,19 @@ These matter for correct use and should be read together with the variable list.
   level as `cc`.
 - **SST is constant within each day.** Each daily run is initialised with a fixed sea surface
   temperature and does not update it. The field therefore has a daily, not hourly, time resolution.
-- **Skin temperature is derived, not modelled.** It is obtained by inverting the upward longwave
-  flux assuming an emissivity of 0.98.
-- **Soil layers are a mapping, not an identity.** The land-surface scheme uses 6 levels at 0, 5,
-  20, 40, 160 and 300 cm; ERA5 uses 4 layers at 0-7, 7-28, 28-100 and 100-289 cm. We map the first
-  four onto the ERA5 names; the two deepest levels have no ERA5 counterpart and are not written.
+- **Skin temperature is derived, not modelled.** `TSK` was not written out, so it is obtained by
+  inverting the upward longwave flux, `LWUPB = eps sigma T^4 + (1-eps) LWDN`, with the emissivity
+  of the dominant land-use category (VEGPARM.TBL, 0.88 urban to 0.98 water). It is exact where the
+  answer is known — over open water the model's skin temperature is the SST and the inversion
+  recovers it to 0.005 K — and it matches the 0 cm soil level to under 1 K RMSE on snow-free
+  land. Over snow the emissivity the scheme actually used cannot be reconstructed: about 0.8 K
+  of residual uncertainty there.
+- **The slope of orography is the resolved one.** ERA5's `slor` is a sub-grid parameter of the
+  form-drag scheme; what we write is the slope of the resolved 3 km terrain. (`sdor` is instead a
+  genuine sub-grid standard deviation, computed by the pre-processor.)
+- **Water contents are specific, not mixing ratios.** WRF carries mixing ratios, per kg of dry
+  air; `clwc`, `ciwc`, `crwc`, `cswc` and the column integrals are converted to specific contents,
+  per kg of moist air, as their ECMWF definitions require (a 0.8 % correction in the median).
 - **Convective inhibition is not defined everywhere.** By construction it is only computed where
   CAPE exceeds 100 J/kg, and CAPE itself is undefined at the few percent of points with no
   equilibrium level. We write **zero** at those points rather than a missing value, so that the

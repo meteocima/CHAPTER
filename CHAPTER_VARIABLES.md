@@ -1,10 +1,15 @@
 # CHAPTER 3 km reanalysis — GRIB2 archive contents
 
-**90 variables, 246 GRIB messages per hourly file.** Generated from the converter's own
+**75 variables, 231 GRIB messages per hourly file.** Generated from the converter's own
 registry (`wrf_era5_comparison.WRF_TO_ECMWF_PARAMID`), which is what the pipeline and its
 sanity check use, so this document cannot drift from what is actually written.
 
 Document generated on 2026-09-17.
+
+Every field here is one we can defend row by row. Where the WRF quantity is not
+exactly the ERA5 one, it is said so below rather than hidden; where it could not be made
+to correspond at all, the field was dropped instead of published under a name that would
+mislead (see §6).
 
 ## 1. What the files are
 
@@ -48,27 +53,26 @@ or, for the radiation budget at the top of the atmosphere, `nominalTop`.
 - Accumulated messages carry `generatingProcessIdentifier = 128` as the marker of the 00 UTC
   reference.
 
-## 4. Soil layers — a mapping, not an identity
+## 4. Declared approximations
 
-The land-surface scheme (RUC) carries **6 soil levels**, point values at depths **0, 5, 20, 40,
-160 and 300 cm**. ERA5 instead uses **4 layers**, averages over **0-7, 7-28, 28-100 and 100-289
-cm**. The two are not the same object, and the ERA5 names are used for the nearest thing we
-have:
+Three fields are not exactly their ERA5 namesake, and are published with that said:
 
-| ERA5 field | ERA5 layer | written from | RUC depth |
-|---|---|---|---|
-| `swvl1` / `stl1` | 0-7 cm | RUC level 1 | 0 cm |
-| `swvl2` / `stl2` | 7-28 cm | RUC level 2 | 5 cm |
-| `swvl3` / `stl3` | 28-100 cm | RUC level 3 | 20 cm |
-| `swvl4` / `stl4` | 100-289 cm | RUC level 4 | 40 cm |
+| field | what ERA5 means | what we write |
+|---|---|---|
+| `slor` | slope of the **sub-grid** orography, a parameter of the form-drag scheme | the slope of the **resolved** 3 km terrain, `\|grad z\|` |
+| `10fg` | gust from a parameterisation (turbulent + convective) | the hourly maximum of the **resolved** 10 m wind |
+| `iews`, `inss` | the model's own stress components | the magnitude `rho u*^2`, projected on the 10 m wind direction |
 
-The two deepest RUC levels (160 and 300 cm) have no ERA5 counterpart and are not written. Note
-that the deeper the layer, the worse the correspondence: `swvl4`/`stl4` carry a value from 40 cm
-under a name that in ERA5 means 1-2.9 m.
+Two more deserve a note rather than a warning:
 
-In the table below these fields appear as **surface**: that is the GRIB level type, and it is
-ERA5's own convention — the layer is identified by the paramId, not by the level, exactly as in
-MARS (`levtype=sfc`). The same holds for every other single-level field.
+- **`skt`** is not a model output here (`TSK` was not written): it is inverted from the
+  upward longwave, `LWUPB = eps sigma T^4 + (1-eps) LWDN`, with the emissivity of the
+  dominant land-use category. It is exact where the answer is known — over open water the
+  model's skin temperature is the SST, and the inversion recovers it to **0.005 K** — and
+  on snow-free land it matches the 0 cm soil level to better than 1 K RMSE. Over
+  snow-covered points the emissivity the land-surface scheme actually used cannot be
+  reconstructed, leaving about ±0.8 K there.
+- **`sst`** is constant within each 24 h run (`SST_UPDATE=0`), re-initialised daily.
 
 ## 5. Masked fields
 
@@ -84,15 +88,31 @@ Written with a GRIB bitmap rather than fake zeros, so missing means missing:
 
 No TKE and no boundary-layer height (the PBL scheme is YSU, non-local); no ocean waves,
 currents, sea surface height or sea-ice thickness (no ocean or wave coupling); no convective
-precipitation (`CU_PHYSICS=0`, so it is identically zero and would be a dead field); no
-fractional land cover (only the dominant category survives). The full reasoning, and the routes
-by which some of it could still be obtained, is in `MISSING_VARIABLES.pdf`.
+precipitation (`CU_PHYSICS=0`, so it is identically zero and would be a dead field).
+
+Deliberately dropped rather than approximated:
+
+- **soil moisture and soil temperature** (`swvl1-4`, `stl1-4`): the land-surface scheme carries
+  point values at 0, 5, 20, 40, 160 and 300 cm, ERA5 averages over 0-7, 7-28, 28-100 and
+  100-289 cm. Writing the first four under the ERA5 names would put a 40 cm value under a name
+  that means 1-2.9 m;
+- **vegetation and soil type** (`tvl`, `tvh`, `slt`): the category numbers are WRF's MODIS-IGBP
+  and STATSGO ones, while those paramIds carry ECMWF's own code tables — code 1 means "crops"
+  to a reader of table 4.234 and "evergreen needleleaf forest" to us;
+- **vegetation cover and leaf area index** (`cvl`, `cvh`, `lai_lv`, `lai_hv`): all rest on one
+  dominant category per cell, while ERA5 lets low and high vegetation coexist, and the model's
+  vegetation fraction is a seasonal *green* fraction, not a static cover fraction;
+- **fractional land cover**: it lives in a static file that no longer exists.
+
+The full reasoning, and the routes by which some of it could still be obtained, is in
+`MISSING_VARIABLES.pdf`.
 
 ## 7. The variables
 
-Descriptions and units are the ECMWF ones. "Time" says how the field is sampled. There are 90
-rows and 89 distinct shortNames, because `z` is written twice: as geopotential on the pressure
+Descriptions and units are the ECMWF ones. "Time" says how the field is sampled. There are 75
+rows and 74 distinct shortNames, because `z` is written twice: as geopotential on the pressure
 levels and as the surface geopotential (orography).
+variables=75 messages=231
 
 ### Pressure levels (13) — 13 variables, 169 messages
 
@@ -153,29 +173,24 @@ levels and as the surface geopotential (orography).
 | `tcwv` | 137 | Total column water vapour | kg/m^2 | column | instantaneous |
 
 
-### Surface / single level — 48 variables, 48 messages
+### Surface / single level — 33 variables, 33 messages
 
 | shortName | paramId | Description | Units | Level | Time |
 |---|---|---|---|---|---|
 | `al` | 174 | Albedo (climatological, snow-free background) | (0-1) | surface | instantaneous |
 | `ci` | 31 | Sea ice area fraction | (0-1) | surface | instantaneous |
-| `cvh` | 28 | High vegetation cover | (0-1) | surface | instantaneous |
-| `cvl` | 27 | Low vegetation cover | (0-1) | surface | instantaneous |
 | `fal` | 243 | Forecast albedo (upward/downward SW at surface) | (0-1) | surface | instantaneous |
 | `fsr` | 244 | Forecast surface roughness | m | surface | instantaneous |
 | `iews` | 229 | Instantaneous eastward turbulent surface stress | N/m^2 | surface | instantaneous |
 | `inss` | 230 | Instantaneous northward turbulent surface stress | N/m^2 | surface | instantaneous |
-| `lai_hv` | 67 | Leaf area index, high vegetation | m^2/m^2 | surface | instantaneous |
-| `lai_lv` | 66 | Leaf area index, low vegetation | m^2/m^2 | surface | instantaneous |
 | `lsm` | 172 | Land-sea mask | (0-1) | surface | instantaneous |
 | `ro` | 205 | Runoff (surface + sub-surface) | m | surface | accumulated since 00 UTC |
 | `rsn` | 33 | Snow density | kg/m^3 | surface | instantaneous |
 | `sd` | 141 | Snow depth (water equivalent) | m | surface | instantaneous |
 | `sdor` | 160 | Standard deviation of orography | m | surface | instantaneous |
 | `sf` | 144 | Snowfall (water equivalent) | m | surface | accumulated since 00 UTC |
-| `skt` | 235 | Skin temperature (from upward longwave) | K | surface | instantaneous |
-| `slor` | 163 | Slope of sub-gridscale orography | Numeric | surface | instantaneous |
-| `slt` | 43 | Soil type (WRF dominant category) | category | surface | instantaneous |
+| `skt` | 235 | Skin temperature (inverted from upward longwave) | K | surface | instantaneous |
+| `slor` | 163 | Slope of orography (resolved, 3 km) | Numeric | surface | instantaneous |
 | `snowc` | 260038 | Snow cover | % | surface | instantaneous |
 | `sp` | 134 | Surface pressure | Pa | surface | instantaneous |
 | `src` | 198 | Skin reservoir content | m | surface | instantaneous |
@@ -186,23 +201,13 @@ levels and as the surface geopotential (orography).
 | `ssrdc` | 228129 | Surface solar radiation downwards, clear sky | J/m^2 | surface | accumulated since 00 UTC |
 | `ssro` | 9 | Sub-surface runoff | m | surface | accumulated since 00 UTC |
 | `sst` | 34 | Sea surface temperature | K | surface | instantaneous |
-| `stl1` | 139 | Soil temperature level 1 | K | surface | instantaneous |
-| `stl2` | 170 | Soil temperature level 2 | K | surface | instantaneous |
-| `stl3` | 183 | Soil temperature level 3 | K | surface | instantaneous |
-| `stl4` | 236 | Soil temperature level 4 | K | surface | instantaneous |
 | `str` | 177 | Surface net thermal radiation | J/m^2 | surface | accumulated since 00 UTC |
 | `strc` | 211 | Surface net thermal radiation, clear sky | J/m^2 | surface | accumulated since 00 UTC |
 | `strd` | 175 | Surface thermal radiation downwards | J/m^2 | surface | accumulated since 00 UTC |
 | `strdc` | 228130 | Surface thermal radiation downwards, clear sky | J/m^2 | surface | accumulated since 00 UTC |
-| `swvl1` | 39 | Volumetric soil water layer 1 | m^3/m^3 | surface | instantaneous |
-| `swvl2` | 40 | Volumetric soil water layer 2 | m^3/m^3 | surface | instantaneous |
-| `swvl3` | 41 | Volumetric soil water layer 3 | m^3/m^3 | surface | instantaneous |
-| `swvl4` | 42 | Volumetric soil water layer 4 | m^3/m^3 | surface | instantaneous |
 | `tirf` | 235015 | Time integral of rain flux (rain only) | kg/m^2 | surface | accumulated since 00 UTC |
 | `tp` | 228 | Total precipitation | m | surface | accumulated since 00 UTC |
 | `tsn` | 238 | Temperature of snow layer | K | surface | instantaneous |
-| `tvh` | 30 | Type of high vegetation (WRF/MODIS dominant category) | category | surface | instantaneous |
-| `tvl` | 29 | Type of low vegetation (WRF/MODIS dominant category) | category | surface | instantaneous |
 | `z` | 129 | Geopotential (surface) | m^2/s^2 | surface | instantaneous |
 | `zust` | 228003 | Friction velocity | m/s | surface | instantaneous |
 

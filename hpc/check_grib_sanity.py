@@ -41,9 +41,8 @@ for _info in WRF_TO_ECMWF_PARAMID.values():
 
 # Fields that are invariant in time and can never be all-zero over the domain.
 # (Not snowc, tsn, fal or ci: those are legitimately empty out of season or at
-# night. cvh/tvh/lai_hv cover ~20% of the land, which is never zero everywhere.)
-STATIC = {'lsm', 'z', 'sdor', 'slor', 'skt', 'slt',
-          'tvl', 'cvl', 'lai_lv', 'tvh', 'cvh', 'lai_hv', 'al'}
+# night.)
+STATIC = {'lsm', 'z', 'sdor', 'slor', 'skt', 'al'}
 TP_MARK = 128
 
 
