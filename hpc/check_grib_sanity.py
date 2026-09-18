@@ -7,8 +7,8 @@ Three independent failure modes are covered:
 
 1. A wrfout that is partly zero-filled (truncated transfer, stub) still opens as
    NetCDF and converts "fine": 2024-12-29T18 came out with lsm, surface z, slor,
-   skt, tcc and tp all zero. Static fields can never be all-zero over the domain,
-   so they are the tell.
+   skt, tcc and tp all zero. Some fields can never be all-zero over the domain
+   whatever the timestep (NEVER_EMPTY below), so they are the tell.
 2. A field that raises inside the converter is reported and the run aborts, but a
    file produced by an older schema would pass unnoticed -- so the full set of
    (shortName -> number of messages) is compared against the registry.
@@ -49,8 +49,8 @@ for _info in WRF_TO_ECMWF_PARAMID.values():
 # the max of the PRESENT values under a bitmap, which is what is wanted for the
 # masked ones (tvl, slt, dl, swvl*, stl*).
 NEVER_EMPTY = {'lsm', 'z', 'sdor', 'slor', 'skt', 'al',
-          'cvl', 'cvh', 'tvl', 'tvh', 'slt', 'cl', 'dl',
-          'swvl1', 'swvl2', 'swvl3', 'swvl4', 'stl1', 'stl2', 'stl3', 'stl4'}
+               'cvl', 'cvh', 'tvl', 'tvh', 'slt', 'cl', 'dl',
+               'swvl1', 'swvl2', 'swvl3', 'swvl4', 'stl1', 'stl2', 'stl3', 'stl4'}
 TP_MARK = 128
 
 

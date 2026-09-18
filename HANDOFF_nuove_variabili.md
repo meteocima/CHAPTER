@@ -165,7 +165,7 @@ dato stesso (~4e-4).
   albero nuovo ogni volta.
 - Registry, converter, `convert_step.sh`/`convert_day.sh`, `fetch_step.sh`,
   `submit_step_pipeline.py`, `conf/pipeline.yaml` (`grib_dir` → **`grib_v3`**, nuovo
-  `static_ref_dir`), `check_grib_sanity.py` (`STATIC` esteso), e la documentazione
+  `static_ref_dir`), `check_grib_sanity.py` (`NEVER_EMPTY` esteso), e la documentazione
   (`CHAPTER_VARIABLES.md` §8 con le tabelle di traduzione, `MISSING_VARIABLES.md`, `CLAUDE.md`).
 
 **`accum_ref_v2` non è stato rinominato** e non va rinominato: non si aggiunge nessun

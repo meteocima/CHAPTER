@@ -190,7 +190,7 @@ wait_chain() {
     done
 }
 
-# The staging slot belongs to this sequence alone: never a shared tree, never
+# The staging slot belongs to this campaign alone: never a shared tree, never
 # another campaign's slot. With KEEP_WRFOUT=false its wrfout are deleted as they
 # convert, so pointing it at one of those would destroy someone else's data.
 case "$STAGING_DIR" in
