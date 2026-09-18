@@ -39,14 +39,16 @@ EXPECTED = collections.Counter()
 for _info in WRF_TO_ECMWF_PARAMID.values():
     EXPECTED[_info['shortName']] += len(_info['levels'])
 
-# Fields that are invariant in time and can never be all-zero over the domain.
-# (Not snowc, tsn, fal or ci: those are legitimately empty out of season or at
-# night.) The geo_em statics belong here because the domain always contains
-# vegetation, soil, lakes and a classified soil type; the eight soil layers
-# because even the driest STATSGO class has DRYSMC > 0 and every temperature is
-# in kelvin. Note the check reads the max of the PRESENT values under a bitmap,
-# which is what is wanted for the masked ones (tvl, slt, dl, swvl*, stl*).
-STATIC = {'lsm', 'z', 'sdor', 'slor', 'skt', 'al',
+# Fields that can never be all-zero over the domain, whatever the timestep. This
+# is a smoke test for a variable that silently failed to compute, not a statement
+# about time: skt and the soil layers change every hour. (Not snowc, tsn, fal or
+# ci: those are legitimately empty out of season or at night.) The geo_em statics
+# belong here because the domain always contains vegetation, soil, lakes and a
+# classified soil type; the eight soil layers because even the driest STATSGO
+# class has DRYSMC > 0 and every temperature is in kelvin. Note the check reads
+# the max of the PRESENT values under a bitmap, which is what is wanted for the
+# masked ones (tvl, slt, dl, swvl*, stl*).
+NEVER_EMPTY = {'lsm', 'z', 'sdor', 'slor', 'skt', 'al',
           'cvl', 'cvh', 'tvl', 'tvh', 'slt', 'cl', 'dl',
           'swvl1', 'swvl2', 'swvl3', 'swvl4', 'stl1', 'stl2', 'stl3', 'stl4'}
 TP_MARK = 128
@@ -55,7 +57,7 @@ TP_MARK = 128
 def check(path):
     problems = []
     found = collections.Counter()
-    zero_static = set()
+    all_zero = set()
     tp_gp = tp_max = None
     with open(path, 'rb') as fh:
         while True:
@@ -65,14 +67,14 @@ def check(path):
             try:
                 name = codes_get(gid, 'shortName')
                 found[name] += 1
-                if name in STATIC and codes_get(gid, 'maximum') == 0 and codes_get(gid, 'minimum') == 0:
-                    zero_static.add(name)
+                if name in NEVER_EMPTY and codes_get(gid, 'maximum') == 0 and codes_get(gid, 'minimum') == 0:
+                    all_zero.add(name)
                 if codes_get(gid, 'paramId') == 228:
                     tp_gp, tp_max = codes_get(gid, 'generatingProcessIdentifier'), codes_get(gid, 'maximum')
             finally:
                 codes_release(gid)
 
-    for name in sorted(zero_static):
+    for name in sorted(all_zero):
         problems.append(f"{name} all zero")
     for name in sorted(set(EXPECTED) | set(found)):
         want, got = EXPECTED[name], found[name]
