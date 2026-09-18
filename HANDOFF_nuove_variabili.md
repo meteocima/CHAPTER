@@ -3,8 +3,8 @@
 Scritto il 2026-09-16, riscritto il 2026-09-17, **riscritto il 2026-09-18** quando il file
 statico `geo_em.d02` è arrivato da LRZ.
 
-> **Stato: il codice è finito e verificato. La campagna è FERMA e NON va fatta ripartire
-> senza un via esplicito dell'utente.**
+> **Stato: il codice è finito e verificato, e la questione `skt` è chiusa per misura (§3).
+> La campagna è FERMA e NON va fatta ripartire senza un via esplicito dell'utente.**
 
 ---
 
