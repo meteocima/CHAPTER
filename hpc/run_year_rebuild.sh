@@ -42,7 +42,8 @@ set -uo pipefail
 PROJECT_DIR="${PROJECT_DIR:-/leonardo/home/userexternal/lmonaco0/CHAPTER}"
 W="${W:-/leonardo_work/AIFPT_AILAMIT/CHAPTER}"
 LOG_DIR="${W}/logs"
-STAGING_DIR="${STAGING_DIR:-${W}/wrfout_rebuild}"   # dedicated: everything here is disposable
+STAGING_DIR="${STAGING_DIR:-${W}/wrfout_rebuild}"   # this sequence's own staging slot;
+                                                    # KEEP_WRFOUT decides if its wrfout survive
 SEQ_LOG="${LOG_DIR}/rebuild_sequence.log"
 SEQ_STOP="${LOG_DIR}/rebuild_sequence.stop"
 UV="${UV:-${HOME}/.local/bin/uv}"
@@ -217,11 +218,12 @@ wait_chain() {
     done
 }
 
-# Everything under STAGING_DIR gets deleted after conversion: never point it at a tree
-# whose wrfout must survive.
+# The staging slot belongs to this sequence alone: never a shared tree, never
+# another campaign's slot. With KEEP_WRFOUT=false its wrfout are deleted as they
+# convert, so pointing it at one of those would destroy someone else's data.
 case "$STAGING_DIR" in
     */wrfout|*/wrfout_share|*/wrfout_2024fill)
-        log "FATAL | STAGING_DIR must be a dedicated disposable dir, not ${STAGING_DIR}"; exit 1 ;;
+        log "FATAL | STAGING_DIR must be this sequence's own staging slot, not ${STAGING_DIR}"; exit 1 ;;
 esac
 
 log "START | sequence on $(hostname), pid $$, staging ${STAGING_DIR}, keep_wrfout=${KEEP_WRFOUT}"

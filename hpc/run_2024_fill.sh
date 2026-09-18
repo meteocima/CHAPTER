@@ -32,7 +32,8 @@ set -uo pipefail
 PROJECT_DIR="${PROJECT_DIR:-/leonardo/home/userexternal/lmonaco0/CHAPTER}"
 W="${W:-/leonardo_work/AIFPT_AILAMIT/CHAPTER}"
 LOG_DIR="${W}/logs"
-FILL_DIR="${FILL_DIR:-${W}/wrfout_2024fill}"   # dedicated staging dir (never wrfout/ or wrfout_share/)
+STAGING_DIR="${STAGING_DIR:-${W}/wrfout_2024fill}"   # this sequence's own staging slot;
+                                                     # KEEP_WRFOUT decides if its wrfout survive
 SEQ_LOG="${LOG_DIR}/fill2024_sequence.log"
 SEQ_STOP="${LOG_DIR}/fill2024_sequence.stop"
 UV="${UV:-${HOME}/.local/bin/uv}"
@@ -128,7 +129,7 @@ wait_for_quota() {
 dl_args() {
     local label="$1" start="$2" end="$3"
     echo "window.start_date=${start} window.start_hour=0 window.end_date=${end} window.end_hour=23" \
-         "pipeline.download_only=true paths.wrfout_dir=${FILL_DIR}" \
+         "pipeline.download_only=true paths.wrfout_dir=${STAGING_DIR}" \
          "batch.fetch_parallel=${FETCH_PARALLEL} batch.size=${MAX_QUEUED} batch.max_queued_converts=0" \
          "paths.status_log=${LOG_DIR}/fill2024_${label}_dl_status.log" \
          "paths.driver_log=${LOG_DIR}/fill2024_${label}_dl_driver.log" \
@@ -140,7 +141,7 @@ cv_args() {
     # KEEP_WRFOUT=false lets convert_step.sh delete each wrfout once its GRIB is in place
     # (it still refuses to delete a 00Z whose accum_ref sidecar is missing); true keeps them.
     echo "window.start_date=${start} window.start_hour=0 window.end_date=${end} window.end_hour=23" \
-         "paths.wrfout_dir=${FILL_DIR} pipeline.keep_wrfout=${KEEP_WRFOUT}" \
+         "paths.wrfout_dir=${STAGING_DIR} pipeline.keep_wrfout=${KEEP_WRFOUT}" \
          "batch.fetch_parallel=${FETCH_PARALLEL} batch.size=${MAX_QUEUED} batch.max_queued_converts=${MAX_QUEUED}" \
          "paths.status_log=${LOG_DIR}/fill2024_${label}_cv_status.log" \
          "paths.driver_log=${LOG_DIR}/fill2024_${label}_cv_driver.log" \
@@ -189,14 +190,17 @@ wait_chain() {
     done
 }
 
-case "$FILL_DIR" in
-    */wrfout|*/wrfout_share)
-        log "FATAL | FILL_DIR must be a dedicated staging dir, not ${FILL_DIR}"; exit 1 ;;
+# The staging slot belongs to this sequence alone: never a shared tree, never
+# another campaign's slot. With KEEP_WRFOUT=false its wrfout are deleted as they
+# convert, so pointing it at one of those would destroy someone else's data.
+case "$STAGING_DIR" in
+    */wrfout|*/wrfout_share|*/wrfout_rebuild)
+        log "FATAL | STAGING_DIR must be this sequence's own staging slot, not ${STAGING_DIR}"; exit 1 ;;
 esac
 
-log "START | sequence on $(hostname), pid $$, staging ${FILL_DIR}"
+log "START | sequence on $(hostname), pid $$, staging ${STAGING_DIR}, keep_wrfout=${KEEP_WRFOUT}"
 cd "$PROJECT_DIR" || { log "FATAL | cannot cd ${PROJECT_DIR}"; exit 1; }
-mkdir -p "$FILL_DIR"
+mkdir -p "$STAGING_DIR"
 
 CV_PENDING=()   # "label start end offset" of the convert chains still to be waited on
 
@@ -222,7 +226,7 @@ for ph in "${PHASES[@]}"; do
         log "FATAL | ${label}: download chain died; exiting (re-run this script, it is re-entrant)"
         exit 1
     fi
-    log "STAGED | ${label}: $(find "${FILL_DIR}" -name 'wrfout_d02_*' -type f | wc -l) wrfout on disk, $(used_tb) TB used"
+    log "STAGED | ${label}: $(find "${STAGING_DIR}" -name 'wrfout_d02_*' -type f | wc -l) wrfout on disk, $(used_tb) TB used"
 
     # Convert this phase in the background (local files only, no datamover) while the
     # next phase downloads. Its wrfout are deleted one by one as the GRIBs appear.
@@ -262,7 +266,7 @@ for pend in "${CV_PENDING[@]}"; do
     log "REPORT | ${label}: $(grep '^# summary' "$rep")"
 done
 log "GRIB_COUNT | 2024: $(find "${W}/grib/2024" -name '*.grib' | wc -l) / 8784"
-log "STAGING_LEFT | $(find "${FILL_DIR}" -name 'wrfout_d02_*' -type f | wc -l) wrfout still in ${FILL_DIR}, $(used_tb) TB used"
+log "STAGING_LEFT | $(find "${STAGING_DIR}" -name 'wrfout_d02_*' -type f | wc -l) wrfout still in ${STAGING_DIR}, $(used_tb) TB used"
 
 month_args=""
 for m in ${SANITY_MONTHS//,/ }; do month_args+=" --month ${m}"; done
