@@ -184,7 +184,9 @@ python hpc/submit_step_pipeline.py \
 # By default direction=backward: the run starts at the NEWEST edge (2025-06-30 23Z)
 # and walks back to the oldest, so the most recent GRIBs are produced first.
 # convert jobs charge slurm.step_convert_account (default aifpt_ailamit_0, the DCGP association).
-# Stop the whole chain with:  pkill -f hpc/fetch_step.sh
+# Stop the whole chain with:  touch <log_dir>/fetch_step.stop   (paths.stop_flag)
+# The driver checks that flag between timesteps and before every respawn. Use it, not
+# pkill: the driver respawns on ONE login node and pkill only sees your own node.
 ```
 
 Preview everything (fetch/convert/respawn commands) **without** network — useful while LRZ is
@@ -215,11 +217,11 @@ python hpc/submit_step_pipeline.py window.start_date=2025-06-30 window.start_hou
 2025-...Z | 2025-06-30T23 | CONVERT_SUBMITTED | job=...
 2025-...Z | 2025-06-30T20 | MISSING_ON_LRZ | File "..." not found.
 2025-...Z | 2025-06-30T19 | FETCH_TIMEOUT | sftp exceeded 600s; usually congestion, occasionally tape -> recall if it persists
-2025-...Z | 2025-06-30T18 | UNREADABLE_TAPE | size=...B not a readable NetCDF; likely tape stub/truncated
+2025-...Z | 2025-06-30T18 | UNREADABLE | size=...B not a readable NetCDF; truncated transfer or tape stub
 ```
 A missing or on-tape file is **logged and skipped, never fatal** — the chain keeps going. On LRZ,
 files may be migrated to tape: visible on the filesystem but not staged, so the wrfout is unreadable.
-These surface as `TAPE_TIMEOUT` / `UNREADABLE_TAPE` / `FETCH_ERROR`. Ask LRZ to recall them, then
+These surface as `FETCH_TIMEOUT` / `UNREADABLE` / `FETCH_ERROR`. Ask LRZ to recall them, then
 re-run the same window (re-entrant: only timesteps without a GRIB are re-fetched).
 
 Consolidated, read-only status report (DONE / GRIB_MISSING / RECALL, with the recall list):
