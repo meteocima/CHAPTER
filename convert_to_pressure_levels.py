@@ -475,11 +475,37 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
             # so BOTH the reflected downward term and a per-point emissivity are
             # needed. Validated where the answer is known exactly: over open
             # water WRF's skin temperature IS the SST (no ocean model), and this
-            # inversion recovers it to 0.005 K on every file tested, summer and
-            # March. Dropping the reflected term costs +1.25 K there; a fixed
-            # eps = 0.98 over land costs up to 4 K on low-emissivity surfaces.
-            # Against the 0 cm soil level on snow-free land the RMSE halves
-            # (1.68 -> 0.98 K in July, 1.85 -> 1.03 K in March).
+            # inversion recovers it to 0.0015 K on every file tested. Dropping
+            # the reflected term costs +1.25 K there; a fixed eps = 0.98 over
+            # land costs up to 4 K on low-emissivity surfaces.
+            #
+            # WHICH eps? Settled by measurement on 2026-09-18, not by assumption.
+            # The relation above is linear in (sigma*T^4 - GLW), so its slope IS
+            # the emissivity; fitted cell by cell over a full diurnal cycle (12
+            # timesteps, July and March) it comes out a per-category CONSTANT --
+            # spread within a category IQR 0.0005-0.0014, and July and March
+            # agree to 0.0005. The control is exact: over water the same fit
+            # returns 0.97999 against a known 0.980, R^2 = 1.000000.
+            # Two candidates were refuted outright:
+            #   * EMISSMIN + shdfac*(EMISSMAX-EMISSMIN), WRF's own init formula:
+            #     the fitted eps is FLAT against VEGFRA (< 0.001 across the whole
+            #     range) where that formula demands a rise of 0.04-0.065. Grass in
+            #     July is the cleanest case -- 0.9202 fitted, 0.920 EMISSMIN,
+            #     0.96 if the summer table had been used.
+            #   * a LANDUSEF-weighted mix: it breaks the one gate where the answer
+            #     is known, taking max|skt - SST| over open water from 0.0015 K to
+            #     0.98 K. With sf_surface_physics=3 WRF never sees LANDUSEF.
+            # So EMISSMIN[IVGTYP] it is, and against the 0 cm soil level on
+            # snow-free land the agreement is 0.03-0.22 K RMSE on seven of the
+            # eleven categories present, <= 0.30 K on nine.
+            #
+            # The exception, stated rather than hidden: over the two arid classes
+            # skt runs colder than the 0 cm soil by 0.68-1.15 K (open shrubland)
+            # and 0.74-1.52 K (barren), night to day. The fit there wants an
+            # emissivity near 0.85-0.88, which would close the gap -- but 0.85 is
+            # BELOW every emissivity in every WRF table (the minimum anywhere is
+            # 0.88, urban), so it cannot be what the model used, and fitting it
+            # would put an invented number under an ERA5 name. Left as is.
             lwupb, glw = gv("LWUPB").values, gv("GLW").values
             cat = np.clip(np.asarray(gv("IVGTYP").values, dtype=int), 1, len(LANDUSE_EMISS) - 1)
             eps = LANDUSE_EMISS[cat]

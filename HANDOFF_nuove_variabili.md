@@ -59,22 +59,41 @@ dominio, che è il riempimento di default di WPS.
 Non pubblicati: `lai_lv`/`lai_hv` (il modello porta un solo LAI per cella) e `anor`/`isor`
 (`OA`/`OL` non sono l'angolo e l'anisotropia di ECMWF).
 
-## 3. `skt` NON è stato toccato — e la ragione conta
+## 3. `skt` NON è stato toccato — questione chiusa per misura
 
-Pesare l'emissività su `LANDUSEF` sembrava il miglioramento ovvio. **È una regressione, misurata:**
+L'emissività che WRF ha usato è stata **ricavata dai dati**, non scelta. La relazione
+`LWUPB − GLW = eps·(σT⁴ − GLW)` è una retta per l'origine la cui pendenza *è* l'emissività;
+adattata cella per cella su un ciclo diurno completo (12 istanti, luglio e marzo) risulta una
+**costante per categoria**: dispersione interna IQR 0.0005–0.0014, e luglio e marzo concordano a
+0.0005. Il controllo è esatto: sull'acqua, dove `TSK` è nota perché è la SST, lo stesso fit
+restituisce **0.97999** contro 0.980, R² = 1.000000.
 
-| emissività | RMSE vs `SOILT1` | gate mare aperto `max\|skt−SST\|` |
+Due candidati sono stati **respinti**:
+
+| ipotesi | perché cade |
+|---|---|
+| mix pesato su `LANDUSEF` | porta `max\|skt−SST\|` sul mare aperto da 0.0015 K a **0.98 K**. Con `sf_surface_physics=3` WRF non vede mai `LANDUSEF` a runtime |
+| `EMISSMIN + shdfac·(EMISSMAX−EMISSMIN)`, la formula con cui WRF stesso inizializza `EMISS` | l'eps adattata è **piatta** rispetto a VEGFRA (< 0.001 su tutto l'intervallo) dove quella formula imporrebbe +0.04…0.065. Il caso più pulito è il prato a luglio: 0.9202 adattato, 0.920 `EMISSMIN`, 0.96 se avesse usato la tabella estiva |
+
+Quindi `EMISSMIN[IVGTYP]` — quello che il converter già fa — è giusto. Contro il livello di suolo
+a 0 cm su terra senza neve:
+
+| superficie | notte | giorno |
 |---|---|---|
-| `EMISSMIN[IVGTYP]` (attuale) | 7.369 K | **0.0015 K** |
-| pesata su `LANDUSEF` | 7.366 K | **0.98 K** ← rompe il gate |
-| `EMISSMIN + shdfac·(EMISSMAX−EMISSMIN)` | 7.187 K | 0.0015 K |
+| foreste, savana, prato, urbano (7 classi) | 0.03–0.11 K RMSE | 0.09–0.22 K |
+| foresta mista, colture | 0.12–0.19 K | 0.21–0.30 K |
+| **arbusteto aperto** | 0.72 K (bias −0.68) | 1.22 K (bias −1.15) |
+| **suolo nudo / rado** | 0.75 K (bias −0.74) | 1.54 K (bias −1.52) |
 
-Con `sf_surface_physics=3` WRF non vede mai `LANDUSEF` a runtime: cerca l'emissività per
-categoria **dominante**. Invertire con una emissività "più realistica" è meno fedele
-all'inversione. Il miglioramento che esiste davvero non ha bisogno del geo_em — è
-l'interpolazione sulla green fraction, la formula con cui WRF stesso inizializza `EMISS` — e
-**non è ancora adottato**: va misurato di notte, dove `SOILT1` è confrontabile con la pelle (alle
-14Z il bias di +6 K è fisica, non errore).
+Sulle due classi aride `skt` corre 1–1.5 K più freddo del suolo. Lì il fit vorrebbe un'emissività
+vicina a **0.85**, che chiuderebbe lo scarto — ma 0.85 sta **sotto ogni emissività di ogni
+tabella WRF** (il minimo assoluto è 0.88, l'urbano), quindi non può essere ciò che il modello ha
+usato, e adottarla significherebbe mettere un numero inventato sotto un nome ERA5. **Non
+"sistemare" questo scarto con un fit.**
+
+Nota per chi rilegge le versioni precedenti: una misura intermedia usava `SOILT1` come
+riferimento e dava 7 K di RMSE con +6 K di bias. Era il campo sbagliato — `SOILT1` è la
+temperatura *dentro la neve*, non la pelle.
 
 ## 4. Costo misurato
 
@@ -157,10 +176,8 @@ insieme di file: è l'unica copia di quelle ~900 ore i cui wrfout non esistono p
 
 ## 8. Decisioni aperte
 
-1. **La misura notturna su `skt`** (§3): due righe di modifica, da chiudere prima della
-   ripartenza se si vuole approfittarne.
-2. `MISSING_VARIABLES.pdf` e `CHAPTER_VARIABLES.pdf` sono da sottoporre ai colleghi; il §6.1 del
+1. `MISSING_VARIABLES.pdf` e `CHAPTER_VARIABLES.pdf` sono da sottoporre ai colleghi; il §6.1 del
    primo chiede conferma proprio sulla lista land-surface, che ora è quasi completa.
-3. `mucape`/`mucin`: i punti indefiniti sono scritti come 0, non come mancanti. Da confermare.
-4. Il geo_em è datato 2022-12-31 18Z e l'archivio arriva al 2025: **ripetere `--check-wrfout` sul
+2. `mucape`/`mucin`: i punti indefiniti sono scritti come 0, non come mancanti. Da confermare.
+3. Il geo_em è datato 2022-12-31 18Z e l'archivio arriva al 2025: **ripetere `--check-wrfout` sul
    primo wrfout 2025 disponibile** prima di fidarsi delle statiche per quell'anno.

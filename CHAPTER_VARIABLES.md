@@ -72,10 +72,25 @@ Three more deserve a note rather than a warning:
 - **`skt`** is not a model output here (`TSK` was not written): it is inverted from the
   upward longwave, `LWUPB = eps sigma T^4 + (1-eps) LWDN`, with the emissivity of the
   dominant land-use category. It is exact where the answer is known — over open water the
-  model's skin temperature is the SST, and the inversion recovers it to **0.005 K** — and
-  on snow-free land it matches the 0 cm soil level to better than 1 K RMSE. Over
-  snow-covered points the emissivity the land-surface scheme actually used cannot be
-  reconstructed, leaving about ±0.8 K there.
+  model's skin temperature is the SST, and the inversion recovers it to **0.0015 K**.
+  Which emissivity the model used was settled by measurement rather than assumed: the
+  relation is linear in `sigma T^4 - LWDN`, so its slope is the emissivity, and fitted cell
+  by cell over a full diurnal cycle it comes out a per-category constant that July and
+  March agree on to 0.0005. Agreement with the 0 cm soil level on snow-free land, by
+  surface type:
+
+  | surface | night | day |
+  |---|---|---|
+  | forests, savanna, grassland, urban (7 classes) | 0.03–0.11 K RMSE | 0.09–0.22 K |
+  | mixed forest, cropland | 0.12–0.19 K | 0.21–0.30 K |
+  | **open shrubland** | 0.72 K (bias −0.68) | 1.22 K (bias −1.15) |
+  | **barren / sparsely vegetated** | 0.75 K (bias −0.74) | 1.54 K (bias −1.52) |
+
+  Over the two arid classes `skt` therefore runs about 1–1.5 K colder than the soil
+  reading. The emissivity fit there wants a value near 0.85, which would close the gap, but
+  that is below every emissivity in every WRF table, so it cannot be what the model used
+  and was not adopted. Over snow-covered points the scheme's own emissivity cannot be
+  reconstructed at all.
 - **`sst`** is constant within each 24 h run (`SST_UPDATE=0`), re-initialised daily.
 - **`dl`** is the lake depth database the run was built with, not a model state: lake
   physics was off (`sf_lake_physics=0`), so nothing in the simulation responds to it. It
