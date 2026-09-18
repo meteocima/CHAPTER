@@ -1,6 +1,6 @@
 # CHAPTER Reanalysis Conversion Pipeline
 
-This pipeline converts the CHAPTER (Computational Hydrometeorology with Advanced Performance to Enhanced Realism) reanalysis output from WRF to ECMWF-compatible GRIB1 format and Anemoi-ready datasets.
+This pipeline converts the CHAPTER (Computational Hydrometeorology with Advanced Performance to Enhanced Realism) reanalysis output from WRF to ECMWF-compatible GRIB2 format and Anemoi-ready datasets.
 
 ![CHAPTER domain map](chapter_domain.png)
 
@@ -13,7 +13,7 @@ CHAPTER is a high-resolution (3 km) regional reanalysis over Europe and the Medi
 
 This pipeline performs two main conversions:
 
-1. **WRF → GRIB1**: Convert CHAPTER WRF output to ECMWF-compatible GRIB1 format using [wrf-python](https://wrf-python.readthedocs.io/en/latest/) for vertical interpolation to pressure levels and derived variable calculations, then eccodes for GRIB1 encoding with proper variable mapping and unit conversions
+1. **WRF → GRIB2**: Convert CHAPTER WRF output to ECMWF-compatible GRIB2 format using [wrf-python](https://wrf-python.readthedocs.io/en/latest/) for vertical interpolation to pressure levels and derived variable calculations, then eccodes for GRIB2 encoding with proper variable mapping and unit conversions
 2. **WRF → Anemoi ZARR**: Convert to Anemoi machine learning framework format using the official [anemoi-datasets](https://anemoi.readthedocs.io/projects/datasets/en/latest/) package
 
 ## CHAPTER Reanalysis Characteristics
@@ -28,7 +28,7 @@ This pipeline performs two main conversions:
 ## Files
 
 ### Main Conversion Scripts
-- `convert_to_pressure_levels.py` - Converts CHAPTER WRF output to pressure levels in GRIB1 format
+- `convert_to_pressure_levels.py` - Converts CHAPTER WRF output to pressure levels in GRIB2 format
 - `wrf_era5_comparison.py` - WRF to ECMWF variable mapping and paramId definitions
 - `wrf_anemoi_recipe.yaml` - Anemoi dataset recipe configuration
 - `run_anemoi_pipeline.sh` - Anemoi pipeline automation script
@@ -46,7 +46,7 @@ This pipeline performs two main conversions:
 
 ### Visualization
 - `plot_anemoi_zarr.ipynb` - Visualize Anemoi ZARR datasets
-- `plot_grib_output.ipynb` - Visualize and validate GRIB1 output files
+- `plot_grib_output.ipynb` - Visualize and validate GRIB output files
 
 ### Build Dependencies
 - `fortran/` - WRF-Python computational extensions (Fortran source)
@@ -78,9 +78,9 @@ This installs all dependencies defined in `pyproject.toml`, including:
 
 ## Usage
 
-### Workflow 1: CHAPTER → GRIB1 (ECMWF Format)
+### Workflow 1: CHAPTER → GRIB2 (ECMWF Format)
 
-Convert CHAPTER WRF output to ECMWF-compatible GRIB1 format with proper projection and variable mapping.
+Convert CHAPTER WRF output to ECMWF-compatible GRIB2 format with proper projection and variable mapping.
 
 ```bash
 uv run convert_to_pressure_levels.py
@@ -89,7 +89,7 @@ uv run convert_to_pressure_levels.py
 **Input**: CHAPTER WRF native files
 - `wrfout_d02_2023-03-28_HH:00:00` (Mercator projection, model levels)
 
-**Output**: GRIB1 files with ECMWF paramIds
+**Output**: GRIB2 files with ECMWF paramIds (tree `grib_v3/`)
 - `output/ailam-an-cima-3km-2023-2023-1h-v1-YYYYMMDDHH.grib`
 
 **Features**:
@@ -97,20 +97,19 @@ uv run convert_to_pressure_levels.py
 - Mercator projection encoding with proper grid parameters
 - ECMWF paramId mapping (table 128)
 - Unit conversions (geopotential, radiation, precipitation)
-- **Lossless GRIB1 second-order packing** (~37% smaller: ≈590 → ≈370 MB/timestep, bit-identical)
-- Bitmap support for missing values; ocean masking for SST via LANDMASK (when SST enabled)
+- **`grid_ccsds` packing** (≈747 MB/timestep for the 246-message schema, ≈6.55 TB/year)
+- WRF's sphere declared in the GRIB (`shapeOfTheEarth=1`, radius 6370000 m), without which
+  eccodes derives a grid off by ~1.1 km at the northern edge
+- Bitmap support for missing values; ocean masking via LANDMASK
 - Derived variables: specific humidity, TCW (total column water), **TQV** (total column water
   vapour), **TCC** (total cloud cover, maximum-random overlap of CLDFRA), skin temperature
-  (Stefan-Boltzmann inversion of LWUPB), slope of orography
-- Variable selection aligned to the MeteoSwiss/COSMO training lists — see
-  [meteoswiss_variable_comparison.md](meteoswiss_variable_comparison.md)
+  (Stefan-Boltzmann inversion of LWUPB, with the per-category emissivity measured from the run),
+  slope of orography
 
-**Key Variables** (active set):
-- **3D (pressure levels)**: t, u, v, w, z, q
-- **2D surface**: 2t, 2d, sp, msl, skt, 10u, 10v, tp, tcw, tcwv (tqv), tcc
-- **Static**: z (orography), lsm, sdor, slor
-- **Disabled** (commented in `wrf_era5_comparison.py`, re-enable by uncommenting): cc, r, pv,
-  pt/theta, sst, ci, slt, strd, ssrd, 2m specific humidity
+**Key Variables**: 90 variables in 246 messages per timestep — 13 on 13 pressure levels plus
+77 single-level. The registry `wrf_era5_comparison.WRF_TO_ECMWF_PARAMID` is the only place the
+set is defined, and [CHAPTER_VARIABLES.md](CHAPTER_VARIABLES.md) documents it in full. See
+[Variables Included](#variables-included-ecmwf-parameter-table-128) below.
 
 ### Workflow 2: CHAPTER → Anemoi ZARR (ML Framework)
 
@@ -141,7 +140,7 @@ This will:
 
 ### Workflow 3: HPC Pipeline (Leonardo ↔ SuperMUC)
 
-Batch-process date ranges on Leonardo by fetching wrfout files from SuperMUC and converting them to GRIB1 via SLURM jobs.
+Batch-process date ranges on Leonardo by fetching wrfout files from SuperMUC and converting them to GRIB2 via SLURM jobs.
 
 **Prerequisites**: SSH control socket must be pre-activated in a tmux session:
 ```bash
@@ -158,7 +157,7 @@ python hpc/submit_pipeline.py --worker                                   # run s
 
 **Pipeline flow** (per day):
 1. **Fetch** (lrd_all_serial): rsync 24 hourly wrfout files from SuperMUC
-2. **Convert** (array job 0-23, depends on fetch): convert each hour to GRIB1, delete wrfout on success
+2. **Convert** (array job 0-23, depends on fetch): convert each hour to GRIB2, delete wrfout on success
 
 The pipeline is **re-entrant**: dates with all 24 GRIBs present are skipped, and individual convert tasks skip if the output already exists.
 
@@ -238,36 +237,44 @@ The driver on `lrd_all_serial` needs no account; convert jobs on `dcgp_usr_prod`
 
 ## Variables Included (ECMWF parameter table 128)
 
-The active set is aligned to the variables used by the MeteoSwiss/COSMO training lists. See
-[meteoswiss_variable_comparison.md](meteoswiss_variable_comparison.md) for the full
-column-by-column comparison, the derivation of each field, and the rationale for what was
-enabled/disabled.
+**90 variables, 246 GRIB messages per timestep.** The set is defined in exactly one place, the
+registry `wrf_era5_comparison.WRF_TO_ECMWF_PARAMID`; `EXPECTED_MESSAGES` is derived from it and
+`hpc/check_grib_sanity.py` enforces it, so a field that silently fails to compute cannot slip
+into the archive.
 
-### Atmospheric 3D (13 pressure levels, 1000-50 hPa)
-- `t`, `q` - Temperature, specific humidity
-- `z` - Geopotential
-- `u`, `v`, `w` - Wind components
+[**CHAPTER_VARIABLES.md**](CHAPTER_VARIABLES.md) is the reference for consumers of the archive:
+every variable with its paramId, units and derivation, the time convention, the declared
+approximations, the masked fields, and what is deliberately absent. Do not restate that list
+here — this section is a map, not a copy.
 
-### Surface / single-level 2D
-- `2t`, `2d` - 2m temperature and dewpoint
-- `10u`, `10v` - 10m wind
-- `sp`, `msl` - Surface and mean-sea-level pressure
-- `skt` - Skin temperature (Stefan-Boltzmann inversion of `LWUPB`, ε=0.98)
-- `tp` - Total precipitation (grid-scale, `RAINNC`)
-- `tcw` - Total column water (vapour + all hydrometeors)
-- `tcwv` (`tqv`) - Total column water vapour (vertical integral of `QVAPOR`)
-- `tcc` - Total cloud cover (maximum-random overlap of `CLDFRA`)
+### Pressure levels (13 levels, 1000-50 hPa) — 13 variables, 169 messages
+`t`, `q`, `r`, `z`, `u`, `v`, `w` (Pa/s) and `wz` (m/s), plus the hydrometeor and cloud fields
+`cc`, `clwc`, `ciwc`, `crwc`, `cswc`.
 
-### Static fields
-- `z` - Terrain height (geopotential)
-- `lsm` - Land-sea mask
-- `sdor`, `slor` - Orographic parameters
+### Single level — 77 variables, 77 messages
+Grouped in CHAPTER_VARIABLES.md §7 as height above ground (11), mean sea level (1), total
+column (10), surface / single level (47), entire lake (1) and top of atmosphere / most unstable
+parcel (7). Among them the 19 accumulated fields (precipitation, runoff, the full radiation
+set), the soil columns `swvl1-4` / `stl1-4`, and the seven fields read from the `geo_em.d02`
+sidecar — `cvl`, `cvh`, `tvl`, `tvh`, `slt`, `cl`, `dl` — which are the only ones invariant
+across the whole archive. `lsm` and `al` are **not**: WRF reclassifies sea-ice points at
+runtime, so both move.
 
-### Disabled (commented out — re-enable in `wrf_era5_comparison.py`)
-Not present in any MeteoSwiss/ERA5/COSMO list, so disabled to keep GRIBs lean:
-`cc` (cloud fraction per level), `r` (relative humidity), `pt`/`theta` (potential temperature),
-`pv` (potential vorticity), `sst`, `ci` (sea ice), `slt` (soil type), `strd`/`ssrd` (downward
-radiation), 2m specific humidity.
+### Accumulations and time convention
+Accumulated fields are referred to **00Z of the same day**, not to run init, and carry
+`generatingProcessIdentifier=128`. They use product definition template 8, so their reference
+time is 00Z and their step is `0-H` while the instantaneous fields carry the valid time
+directly. **Index the archive on validity, never on `dataTime`.** CHAPTER_VARIABLES.md §3 has
+the details.
+
+### Not in the archive
+`MISSING_VARIABLES.md` records what cannot be produced from these wrfout at all (no TKE, no
+PBLH, no ocean coupling, no `TSK`/`HFX`/`LH`), and why. CHAPTER_VARIABLES.md §6 records what is
+present in the wrfout but deliberately unpublished. Read one of them before promising a field.
+
+The historical comparison against the MeteoSwiss/COSMO training lists, which drove the original
+GRIB1 selection, is in
+[meteoswiss_variable_comparison.md](meteoswiss_variable_comparison.md).
 
 ### Forcings (added by Anemoi, not by the GRIB conversion)
 The temporal/positional features used in training (`cos/sin_latitude`, `cos/sin_longitude`,
