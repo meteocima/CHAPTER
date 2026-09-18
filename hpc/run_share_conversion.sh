@@ -6,10 +6,10 @@
 # still to be copied by a colleague, and nothing is deleted until asked -- and
 # never queues more than 48 convert jobs (two days of reanalysis) at a time.
 #
-# Per window (the "chain name" is the first field of WINDOWS and prefixes every
+# Per phase (the "chain name" is the first field of PHASES and prefixes every
 # per-chain file: <name>_conv_status.log, <name>_conv_driver.log, <name>_conv.stop):
 #   1. launch the step pipeline (hpc/submit_step_pipeline.py) with keep_wrfout and the
-#      queue gate -- unless a chain for that window is already alive (then just wait)
+#      queue gate -- unless a chain for that phase is already alive (then just wait)
 #   2. wait for "Window complete" in its driver log and an empty conv_* queue;
 #      a driver log silent for > DEAD_MINUTES without completion -> CHAIN_DEAD, stop
 #   3. write the read-only report and submit a 1-core check_grib_sanity job
@@ -18,7 +18,7 @@
 # It snapshots itself and re-execs detached (setsid), so the terminal / chat can be
 # closed and edits to the repo copy do not touch the running sequence. Re-entrant:
 # re-running skips existing GRIBs. Stop: touch ${W}/logs/share_conv_sequence.stop
-# (plus the per-window share<year>_conv.stop to stop the driver itself).
+# (plus the per-phase share<year>_conv.stop to stop the driver itself).
 
 set -uo pipefail
 
@@ -34,10 +34,10 @@ POLL_SECONDS=300
 SANITY_ACCOUNT=aifpt_ailamit_0
 
 # chain-name  start_date  end_date  months-for-sanity  wrfout-subdir
-# The chain name is only an identifier for the per-window ledger/driver/stop
+# The chain name is only an identifier for the per-phase ledger/driver/stop
 # triplet; it must not collide with an older chain, whose stop flag would kill
 # this one on sight (that is why March is share2024mar, not fill2024_p3_mar).
-WINDOWS=(
+PHASES=(
     "share2024    2024-06-18 2024-09-12 2024-06,2024-07,2024-08,2024-09 wrfout_share"
     "share2019    2019-06-17 2019-09-06 2019-06,2019-07,2019-08,2019-09 wrfout_share"
     "share2024mar 2024-03-18 2024-03-31 2024-03                         wrfout_2024fill"
@@ -82,8 +82,8 @@ pipeline_args() {
 log "START | sequence on $(hostname), pid $$"
 cd "$PROJECT_DIR" || { log "FATAL | cannot cd ${PROJECT_DIR}"; exit 1; }
 
-for win in "${WINDOWS[@]}"; do
-    read -r y start end months wdir <<<"$win"
+for ph in "${PHASES[@]}"; do
+    read -r y start end months wdir <<<"$ph"
     check_stop
     dlog="${LOG_DIR}/${y}_conv_driver.log"
     ystop="${LOG_DIR}/${y}_conv.stop"
@@ -109,7 +109,7 @@ for win in "${WINDOWS[@]}"; do
         fi
     fi
 
-    # 2. wait for the window to finish
+    # 2. wait for this phase's chain to finish
     while :; do
         sleep "$POLL_SECONDS"
         check_stop
@@ -154,4 +154,4 @@ ${UV} run python hpc/check_grib_sanity.py${month_args}")
     log "SANITY_SUBMITTED | ${y}: job ${jid:-FAILED} -> ${LOG_DIR}/${y}_sanity_${jid}.out"
 done
 
-log "DONE | all windows processed"
+log "DONE | all phases processed"
