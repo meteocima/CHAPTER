@@ -32,6 +32,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hpc import ledger  # noqa: E402  (needs the path insert above)
 
+# Width of the report's state column. Derived from the ledger vocabulary, because
+# the longest state is "RECALL:<longest problem token>" and hardcoding it means
+# the table stops lining up the day a longer token is added. "GRIB_MISSING" and
+# "DONE" are shorter than every one of these, so they do not enter the maximum.
+STATE_WIDTH = max(len(f"RECALL:{tag}")
+                  for tag, kind in ledger.TOKEN_KINDS.items() if kind == ledger.PROBLEM)
+
 
 def parse_sbatch_jobid(output: str) -> str:
     """Extract job ID from sbatch output like 'Submitted batch job 12345'."""
@@ -124,7 +131,7 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
     else:
         print(f"# grib_dir:   {grib_dir}")
     print(f"# status_log: {status_log}")
-    print(f"#  {'timestep':16}  {'state':18}  detail")
+    print(f"#  {'timestep':16}  {'state':{STATE_WIDTH}}  detail")
     for dt in hours:
         dts = dt.strftime("%Y-%m-%dT%H")
         ok, _ = produced(dt)
@@ -140,7 +147,7 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
             state = missing_label
             detail = "(no problem logged; fetch pending or not attempted)"
             missing += 1
-        print(f"   {dts:16}  {state:18}  {detail[:80]}")
+        print(f"   {dts:16}  {state:{STATE_WIDTH}}  {detail[:80]}")
     if summary.chain_events:
         # Not timesteps: these are about the driver itself, and they mean the chain
         # stopped early -- so the pending rows above may never have been attempted.
@@ -153,8 +160,10 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
     print(f"\n# summary: {done} done, {missing} pending, {recall} need recall/attention")
     if summary.unknown:
         counted = ", ".join(f"{tag} ({n}x)" for tag, n in sorted(summary.unknown.items()))
-        print(f"# WARNING: {sum(summary.unknown.values())} ledger entries carry a token this "
-              f"report does not know: {counted}")
+        n_lines = sum(summary.unknown.values())
+        subject = "entry carries" if n_lines == 1 else "entries carry"
+        print(f"# WARNING: {n_lines} ledger {subject} a token this report does "
+              f"not know: {counted}")
     if recall_list:
         print("# timesteps to recall on LRZ:\n " + " ".join(recall_list))
 
