@@ -391,9 +391,9 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
             fields, meta = accum_ref.extract_from_wrfout(input_file)
             accum_00z = {v: fields[v] for v in needed}
             if accum_ref_dir:
-                sidecar = accum_ref.ref_path(accum_ref_dir, valid)
+                sidecar = accum_ref.sidecar_path(accum_ref_dir, valid)
                 if not os.path.isfile(sidecar):
-                    accum_ref.write_ref(sidecar, fields, meta)
+                    accum_ref.write_sidecar(sidecar, fields, meta)
                     print(f"  wrote 00Z sidecar: {sidecar}")
             print(f"  input is 00Z: {needed} are zero by construction")
         else:

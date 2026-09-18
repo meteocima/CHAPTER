@@ -52,7 +52,7 @@ ACCUMULATED_VARS = [
 ACCUM_FROM_00Z_GENPROC = 128
 
 
-def ref_path(accum_ref_dir, target_date):
+def sidecar_path(accum_ref_dir, target_date):
     """Sidecar path for a target date (datetime/date or 'YYYY-MM-DD')."""
     if isinstance(target_date, str):
         target_date = datetime.strptime(target_date, '%Y-%m-%d')
@@ -60,7 +60,7 @@ def ref_path(accum_ref_dir, target_date):
                         f"accum_ref_{target_date:%Y%m%d}.npz")
 
 
-def write_ref(path, fields, meta):
+def write_sidecar(path, fields, meta):
     """Atomically write the sidecar (unique tmp in the same dir + os.replace),
     so concurrent writers and readers never see a partial file."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -81,7 +81,7 @@ def write_ref(path, fields, meta):
         raise
 
 
-def load_ref(path):
+def load_sidecar(path):
     """Return (fields, meta) from a sidecar."""
     with np.load(path) as z:
         fields = {k[4:]: z[k] for k in z.files if k.startswith('var_')}
@@ -120,12 +120,12 @@ def get_reference(input_file, target_date, var_names, sim_start, accum_ref_dir=N
     the wrfout between our two checks) -> FileNotFoundError.
     sim_start: SIMULATION_START_DATE of the input, checked against the reference.
     """
-    sidecar = ref_path(accum_ref_dir, target_date) if accum_ref_dir else None
+    sidecar = sidecar_path(accum_ref_dir, target_date) if accum_ref_dir else None
     w00 = wrfout_00z_path(input_file, target_date)
 
     def from_sidecar():
         if sidecar and os.path.isfile(sidecar):
-            fields, meta = load_ref(sidecar)
+            fields, meta = load_sidecar(sidecar)
             return fields, meta, sidecar
         return None
 
@@ -134,7 +134,7 @@ def get_reference(input_file, target_date, var_names, sim_start, accum_ref_dir=N
         try:
             fields, meta = extract_from_wrfout(w00)
             if sidecar and not os.path.isfile(sidecar):
-                write_ref(sidecar, fields, meta)
+                write_sidecar(sidecar, fields, meta)
             found = (fields, meta, w00)
         except (OSError, RuntimeError):
             found = None  # deleted/being deleted under us: fall through to sidecar
@@ -170,11 +170,11 @@ def _cli(argv):
     if valid.hour != 0:
         print(f"ERROR: {wrfout} is {meta['valid_time']}, not a 00Z file", file=sys.stderr)
         return 1
-    path = ref_path(accum_ref_dir, valid)
+    path = sidecar_path(accum_ref_dir, valid)
     if os.path.isfile(path):
         print(f"exists: {path}")
         return 0
-    write_ref(path, fields, meta)
+    write_sidecar(path, fields, meta)
     print(f"written: {path}")
     return 0
 

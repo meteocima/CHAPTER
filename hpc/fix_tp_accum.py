@@ -143,7 +143,7 @@ def fix_day(day, files, accum_ref_dir, ledger, dry_run):
     """files: {hour: path}. Returns a Counter-like dict of outcomes."""
     out = defaultdict(int)
     date = datetime.strptime(day, '%Y%m%d')
-    sidecar = accum_ref.ref_path(accum_ref_dir, date)
+    sidecar = accum_ref.sidecar_path(accum_ref_dir, date)
 
     # Current state of every file (tp values are only kept for 00Z)
     marks = {}
@@ -172,7 +172,7 @@ def fix_day(day, files, accum_ref_dir, ledger, dry_run):
     # Reference: unmarked 00Z GRIB, else the sidecar
     side = None
     if os.path.isfile(sidecar):
-        side, _ = accum_ref.load_ref(sidecar)
+        side, _ = accum_ref.load_sidecar(sidecar)
         if 'RAINNC' not in side:
             side = None
     if ref_m is not None and side is not None:
@@ -203,7 +203,7 @@ def fix_day(day, files, accum_ref_dir, ledger, dry_run):
     if not os.path.isfile(sidecar):
         # Values are the WRF array flattened in C order (see the converter): store
         # them 2D, as a wrfout-sourced sidecar, so the converter can use either.
-        accum_ref.write_ref(sidecar, {'RAINNC': (ref_m * 1000.0).reshape(shape)},
+        accum_ref.write_sidecar(sidecar, {'RAINNC': (ref_m * 1000.0).reshape(shape)},
                             {'source': 'grib', 'source_path': ref_src,
                              'valid_time': f"{date:%Y-%m-%d}_00:00:00"})
         log(ledger, sidecar, 'REF_WRITTEN', f"from {ref_src}")
