@@ -59,13 +59,16 @@ or, for the radiation budget at the top of the atmosphere, `nominalTop`.
 
 ## 4. Declared approximations
 
-Three fields are not exactly their ERA5 namesake, and are published with that said:
+Four fields are not exactly their ERA5 namesake, and are published with that said:
 
 | field | what ERA5 means | what we write |
 |---|---|---|
 | `slor` | slope of the **sub-grid** orography, a parameter of the form-drag scheme | the slope of the **resolved** 3 km terrain, `\|grad z\|` |
 | `10fg` | gust from a parameterisation (turbulent + convective) | the hourly maximum of the **resolved** 10 m wind |
 | `iews`, `inss` | the model's own stress components | the magnitude `rho u*^2`, projected on the 10 m wind direction |
+| `lsm` | a **permanent** land-sea mask; sea ice is carried separately in `ci` | WRF's `LANDMASK`, which reclassifies sea-ice points as land, so the mask **grows in winter**. `lsm & ~(ci > 0)` recovers the ERA5 sense exactly, and `ci` is published |
+
+The `lsm` row is the reason the soil mask in section 5 moves while `slt` does not: the soil columns follow the model's hourly mask, because that is the mask the model integrated on, whereas the static fields follow the permanent one.
 
 Three more deserve a note rather than a warning:
 
