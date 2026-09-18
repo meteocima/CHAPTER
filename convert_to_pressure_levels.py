@@ -36,6 +36,8 @@ from eccodes import (codes_grib_new_from_samples, codes_set, codes_set_values,
 from wrf_era5_comparison import WRF_TO_ECMWF_PARAMID, PRESSURE_LEVELS, EXPECTED_MESSAGES
 # Accumulated fields are referred to 00Z of the same day (see accum_ref.py)
 import accum_ref
+# Static land fields come from a geo_em sidecar (see static_ref.py)
+import static_ref
 
 G = 9.80665                 # m/s^2, standard gravity (geopotential)
 WRF_EARTH_RADIUS = 6370000  # m, the sphere WRF integrates on
@@ -57,6 +59,51 @@ UNIT_SCALE = {
 }
 
 SIGMA = 5.670374419e-8      # W m^-2 K^-4, Stefan-Boltzmann
+
+# ---------------------------------------------------------------------------
+# Soil: RUC's profile integrated onto the ERA5 layers
+# ---------------------------------------------------------------------------
+# RUC is a LEVEL scheme: TSLB/SMOIS are point values at these nodes and the
+# profile between them is linear, so an ERA5 layer average is the exact integral
+# of that interpolant. The whole ERA5 column lies inside the RUC nodes (289 cm
+# is above the deepest node, 0 cm is the first one), so nothing is extrapolated.
+RUC_SOIL_NODES = (0.0, 0.05, 0.20, 0.40, 1.60, 3.00)          # m, = ZS in the wrfout
+ERA5_SOIL_LAYERS = ((0.0, 0.07), (0.07, 0.28), (0.28, 1.00), (1.00, 2.89))  # m
+
+
+def _soil_layer_weights(nodes, layers):
+    """Constant matrix W such that layer_k = sum_i W[k,i] * value_at_node_i.
+
+    Each ERA5 layer is split at every RUC node inside it, the trapezoid rule is
+    applied on each sub-interval of the linear interpolant, and the result is
+    divided by the layer thickness.
+    """
+    z = np.asarray(nodes, dtype=float)
+    w = np.zeros((len(layers), len(z)))
+    for k, (a, b) in enumerate(layers):
+        edges = sorted({a, b} | {float(v) for v in z if a < v < b})
+        for lo, hi in zip(edges[:-1], edges[1:]):
+            i = max(j for j in range(len(z) - 1) if z[j] <= lo + 1e-12)
+            thick = hi - lo
+            for x, share in ((lo, 0.5), (hi, 0.5)):
+                f = (x - z[i]) / (z[i + 1] - z[i])
+                w[k, i] += share * thick * (1.0 - f)
+                w[k, i + 1] += share * thick * f
+        w[k] /= (b - a)
+    return w
+
+
+SOIL_LAYER_WEIGHTS = _soil_layer_weights(RUC_SOIL_NODES, ERA5_SOIL_LAYERS)
+assert np.allclose(SOIL_LAYER_WEIGHTS.sum(axis=1), 1.0, atol=1e-12), \
+    "soil layer weights must average, not sum"
+
+# Derived fields that need no 3D field at all, so that a --debug-vars run asking
+# only for these can skip the 2.6 GB shared cache. An ALLOWLIST on purpose: a key
+# forgotten here merely loads the cache it did not need, while a key wrongly
+# listed would crash. The static ones come straight from the geo_em sidecar, the
+# soil ones from SMOIS/TSLB.
+FLAT_DERIVED = set(static_ref.STATIC_VARS) | {
+    f'{prefix}{i}' for prefix in ('swvl', 'stl') for i in range(1, 5)}
 
 # Surface emissivity by dominant land-use category: the EMISSMIN column of
 # VEGPARM.TBL, section MODIFIED_IGBP_MODIS_NOAH (this run's MMINLU), indexed by
@@ -105,6 +152,11 @@ def parse_args():
     parser.add_argument(
         "--debug-vars", nargs="*", default=[],
         help="Limit processing to these registry keys only (default: all)")
+    parser.add_argument(
+        "--static-ref-dir", default=None,
+        help="Directory holding the geo_em static sidecar (static_ref.py). "
+             "Required for the static land fields "
+             + "/".join(static_ref.STATIC_VARS))
     parser.add_argument(
         "--accum-ref-dir", default=None,
         help="Directory of 00Z reference sidecars for accumulated fields (accum_ref.py). "
@@ -202,7 +254,8 @@ def write_message(fout, values, info, level, grid, valid):
 # main
 # ============================================================================
 
-def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
+def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
+         static_ref_dir=None):
     debug_vars = debug_vars or []
 
     def want(key):
@@ -229,11 +282,29 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
     valid = pd.Timestamp(wrf.extract_times(ncfile, timeidx=wrf.ALL_TIMES)[0])
     print(f"Grid {grid['ni']}x{grid['nj']}, timestep {valid}")
 
+    # Static land fields, loaded OUTSIDE any try/except -- the same contract as
+    # the 00Z accumulation reference. A missing or mismatched sidecar must abort
+    # the run rather than quietly write a file without the static block.
+    static_fields = {}
+    wanted_static = [k for k in static_ref.STATIC_VARS if want(k)]
+    if wanted_static:
+        if not static_ref_dir:
+            sys.exit(f"ERROR: --static-ref-dir is required for {wanted_static}")
+        static_fields, static_meta = static_ref.load_static(static_ref_dir)
+        # The one guard that stops a geo_em from another domain from silently
+        # poisoning the archive: every field would still encode, on the right
+        # number of points, with the wrong geography.
+        static_ref.assert_grid(static_meta, grid, source=input_file)
+        print(f"Static sidecar: {static_ref.static_path(static_ref_dir)} "
+              f"(geo_em {static_meta['source_path']})")
+
     # Shared by every 3D diagnostic; read once instead of once per getvar call.
     # Skipped when the run only asks for plain 2D fields, so that a --debug-vars
     # check on a surface variable stays a few seconds instead of reading 2.6 GB.
-    flat_only = all(WRF_TO_ECMWF_PARAMID[k]['levelType'] in ('surface', 'heightAboveGround')
-                    and k in ncfile.variables
+    # Derived 2D fields count as flat too (FLAT_DERIVED), otherwise asking for
+    # one of them alone would read the whole 3D cache it never touches.
+    flat_only = all((WRF_TO_ECMWF_PARAMID[k]['levelType'] in ('surface', 'heightAboveGround')
+                     and k in ncfile.variables) or k in FLAT_DERIVED
                     for k in WRF_TO_ECMWF_PARAMID if want(k))
     cache = {} if flat_only else wrf.extract_vars(
         ncfile, 0, ('P', 'PB', 'PH', 'PHB', 'T', 'QVAPOR', 'PSFC', 'HGT'))
@@ -482,18 +553,41 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
             print(f"  iews/inss: FAILED: {exc}")
 
 
-    # Soil: RUC's first four levels mapped onto the ERA5 layer names.
-    for native, prefix in (('SMOIS', 'SMOIS'), ('TSLB', 'TSLB')):
-        keys = [f'{prefix}{i}' for i in range(1, 5)]
-        if not any(want(k) for k in keys):
-            continue
+    # ---------------- static land fields (geo_em sidecar) -------------------
+    # Time-invariant, so they are read from a sidecar built once by static_ref.py
+    # instead of opening a 2.4 GB NetCDF per timestep. tvl and dl already carry
+    # NaN where they are undefined; write_message turns that into a bitmap.
+    for key in wanted_static:
         try:
-            layers = np.asarray(ncfile.variables[native][0], dtype=float)
-            for i, key in enumerate(keys):
-                if want(key):
-                    emit(key, layers[i])
+            emit(key, static_fields[key], "(geo_em static)")
         except Exception as exc:
-            print(f"  {native}: FAILED: {exc}")
+            print(f"  {key}: FAILED: {exc}")
+
+    # ---------------- soil: ERA5 layer averages of the RUC profile ----------
+    soil_keys = [f'{prefix}{i}' for prefix in ('swvl', 'stl') for i in range(1, 5)]
+    if any(want(k) for k in soil_keys):
+        try:
+            zs = np.asarray(ncfile.variables['ZS'][0], dtype=float)
+            if not np.allclose(zs, RUC_SOIL_NODES, atol=1e-6):
+                raise ValueError(f"soil nodes are {zs.tolist()} m, but the ERA5 layer "
+                                 f"weights were built for {list(RUC_SOIL_NODES)} m")
+            for native, prefix in (('SMOIS', 'swvl'), ('TSLB', 'stl')):
+                keys = [f'{prefix}{i}' for i in range(1, 5)]
+                if not any(want(k) for k in keys):
+                    continue
+                profile = np.asarray(ncfile.variables[native][0], dtype=float)
+                layers = np.tensordot(SOIL_LAYER_WEIGHTS, profile, axes=(1, 0))
+                for i, key in enumerate(keys):
+                    if not want(key):
+                        continue
+                    lo, hi = ERA5_SOIL_LAYERS[i]
+                    # RUC integrates no soil column over water. The mask MOVES with
+                    # the sea-ice reclassification, so it is the wrfout's own
+                    # landmask, never the static one.
+                    emit(key, np.where(ocean, np.nan, layers[i]),
+                         f"({100 * lo:.0f}-{100 * hi:.0f} cm layer average)")
+        except Exception as exc:
+            print(f"  soil layers: FAILED: {exc}")
 
     if want('tirf'):
         try:
@@ -656,4 +750,5 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None):
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.input, args.output, args.debug_vars, args.accum_ref_dir)
+    main(args.input, args.output, args.debug_vars, args.accum_ref_dir,
+         args.static_ref_dir)

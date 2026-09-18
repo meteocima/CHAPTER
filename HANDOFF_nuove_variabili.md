@@ -1,138 +1,166 @@
-# Handoff — nuove variabili nei GRIB CHAPTER
+# Handoff — le variabili recuperate da geo_em.d02
 
-Scritto il 2026-09-16, riscritto il 2026-09-17 dopo il secondo giro di variabili.
+Scritto il 2026-09-16, riscritto il 2026-09-17, **riscritto il 2026-09-18** quando il file
+statico `geo_em.d02` è arrivato da LRZ.
 
-**Stato: lo schema a 246 messaggi è implementato e testato su tre file reali. La campagna di
-ri-conversione NON è partita.**
+> **Stato: il codice è finito e verificato. La campagna è FERMA e NON va fatta ripartire
+> senza un via esplicito dell'utente.**
 
 ---
 
-## 1. Cosa è cambiato
+## 1. Cosa è successo
 
-Lo schema è passato da **21 variabili / 93 messaggi in GRIB1** a **90 variabili / 246 messaggi
-in GRIB2**, in due tappe: prima 62/182 (commit `c1f8a2f`), poi altre 28 voci trovate rileggendo
-per intero le 200 variabili del wrfout. Nessuna variabile precedente è stata tolta.
+`geo_em.d02` — dichiarato irrecuperabile in `CLAUDE.md`, nel registry, in `MISSING_VARIABLES.md`
+e nella versione precedente di questo file — è stato ottenuto da LRZ. Sta in
+`/leonardo_work/AIFPT_AILAMIT/CHAPTER/geo_em/` (fuori da HOME e fuori dal worktree git), con
+`wrfinput_d02`, `wrfbdy_d01`, `namelist.input` e `namelist.wps`.
 
-Il passaggio a GRIB2 non è estetico: `2r`, `tirf`, `mucape`, `mucin` e `wz` **non esistono in
-GRIB1**, e GRIB1 non sa dichiarare la sfera su cui WRF integra (vedi §4).
+**È il file dei run, verificato e non assunto:**
 
-Prima tappa: `tirf`, `2r`, `10fg`, `100u/100v`, `200u/200v`, `vwsh`, `hcc/mcc/lcc`,
-`mucape/mucin`, `ssrd`, `tsr`, `r`, `clwc`, `ciwc`, `w` (ω) e `wz` sui livelli, `sst`, `ci`, e il
-land-surface ERA5 (`swvl1-4`, `stl1-4`, `sd`, `rsn`, `sf`, `src`, `sro`, `ssro`, `cvl`, `lai_lv`,
-`tvl`, `slt`, `zust`, `fsr`).
-
-Seconda tappa (28 voci, 64 messaggi):
-
-| gruppo | variabili |
+| controllo | esito |
 |---|---|
-| livelli di pressione (+39 msg) | `cc` (frazione di nube), `crwc` (pioggia), `cswc` (neve) |
-| integrali di colonna | `tclw`, `tciw`, `tcrw`, `tcsw` |
-| radiazione, il bilancio completo | `strd`, `ssrdc`, `strdc`, `tisr` (nativi) · `ssr`, `str`, `ssrc`, `strc`, `tsrc`, `ttr`, `ttrc` (netti) |
-| idrologia e neve | `ro`, `snowc`, `tsn` |
-| albedo | `al` (background senza neve), `fal` (reale, con bitmap di notte) |
-| vegetazione alta | `cvh`, `tvh`, `lai_hv` — e `cvl`/`tvl`/`lai_lv` **ridefinite** alla sola vegetazione bassa |
-| sforzo superficiale | `iews`, `inss` |
+| `XLAT_M`/`XLONG_M` contro un wrfout | differenza massima **0.0** |
+| `LU_INDEX` contro `IVGTYP` (escluso il recode dei laghi) | **100.00 %** su 2019-08 e 2024-07, 99.95 % su 2024-03 (la differenza è il ghiaccio marino) |
+| `SCT_DOM` contro `ISLTYP` | 98.5 % (la differenza è acqua/ghiaccio) |
+| `HGT_M` contro `HGT` | rms 8.24 m, il ritocco di `real.exe` |
 
-La separazione alta/bassa usa `ZTOPV` di `VEGPARM.TBL` (sezione `MODIFIED_IGBP_MODIS_NOAH`,
-lo schema del run): categorie 1-5 e 18 sono alta (19,6 % della terra), 6-12/14/19/20 bassa
-(50,5 %); urbano, nudo, ghiaccio e acqua non sono né l'una né l'altra. **Questa ridefinizione è
-l'unico contenuto che cambia** rispetto ai 182 messaggi: prima `cvl`/`tvl`/`lai_lv` contenevano
-tutto indistintamente, il che era una mappatura sbagliata su ERA5.
+L'unica differenza sistematica è categoria 21 (lago) → 17 (acqua): `sf_lake_physics=0`. È
+esattamente il motivo per cui `cl` è informazione nuova — **19 309 celle che la maschera terra/mare
+chiama terra contengono un lago sub-griglia**, e il modello quella classe l'ha buttata a runtime.
 
-La lista autorevole è il dict `WRF_TO_ECMWF_PARAMID` in `wrf_era5_comparison.py`; quello che
-**non** si può produrre, e perché, è in `MISSING_VARIABLES.md` (+ `.pdf`, da sottoporre ai
-colleghi).
+## 2. Lo schema: 231 → 246 messaggi
 
-## 2. Bug trovati e corretti per strada
+75 → **90 voci**, +15 messaggi, tutti a livello singolo. **Puramente additivo, verificato**:
+rileggendo un GRIB vecchio e uno nuovo dello stesso timestep, i 231 messaggi preesistenti sono
+identici byte a byte, 15 aggiunti, 0 modificati.
 
-| | |
-|---|---|
-| `W` era scritto con `paramId=40` in tabella 128, che eccodes rilegge come **`swvl2`** (umidità del suolo) | ora `wz` = 260238, più `w` = 135 (ω in Pa/s) |
-| `2d` era scritto in **gradi Celsius** sotto un paramId che ECMWF definisce in kelvin | ora si chiede `getvar('td2', units='K')`. **L'archivio GRIB1 esistente ha questo errore**: chi lo usa deve sommare 273.15 |
-| La griglia era geolocalizzata con un errore fino a **~1,1 km** al bordo nord | ora `shapeOfTheEarth=1` con raggio 6370 km (quello di WRF): errore ~2 m |
-| Una variabile che falliva veniva stampata e ignorata, il file usciva incompleto | ora la conversione **aborta**, e `check_grib_sanity.py` verifica l'inventario completo dei messaggi |
-| `CLDFRA` era documentata come **binaria 0/1**: falso. `ICLOUD=1` è Xu-Randall, il campo è continuo (solo il 18-22 % dei punti nuvolosi sta esattamente a 1) | corretto in `CLAUDE.md` e `MISSING_VARIABLES.md`; `cc` è ora pubblicata anche sui livelli |
-| `cp`/`csf` stavano per essere pubblicate come "zeri fisicamente corretti" | no: `CU_PHYSICS=0` le rende **campi morti**, e un campo sempre zero resta un campo morto qualunque sia la ragione. Fuori |
+| campo | paramId | da dove |
+|---|---|---|
+| `cvl`, `cvh` | 27, 28 | somma di `LANDUSEF` sulle classi MODIS basse / alte |
+| `tvl`, `tvh` | 29, 30 | classe dominante bassa / alta tradotta in code table 4.234 |
+| `slt` | 43 | soglie FAO di ECMWF su `CLAYFRAC`/`SANDFRAC` — nessun crosswalk di categorie |
+| `cl`, `dl` | 26, 228007 | `LANDUSEF[21]` e `LAKE_DEPTH` (`dl` su `entireLake`) |
+| `swvl1-4` | 39-42 | medie di strato ERA5 del profilo RUC (`SMOIS`) |
+| `stl1-4` | 139, 170, 183, 236 | idem (`TSLB`) |
 
-## 3. Vincoli scoperti, da non violare
+**Il blocco suolo è integrato, non rietichettato.** RUC ha 6 nodi a 0/5/20/40/160/300 cm e un
+profilo lineare fra loro; gli strati ERA5 (0-7, 7-28, 28-100, 100-289 cm) stanno **tutti dentro**
+quei nodi, quindi ogni strato è l'integrale esatto del profilo del modello e non si estrapola
+niente. In pratica una matrice 4×6 costante (`convert_to_pressure_levels.SOIL_LAYER_WEIGHTS`).
+Questo è ciò che è cambiato rispetto al 2026-09-17: l'obiezione era contro lo scrivere i valori
+puntuali, non contro l'integrarli.
 
-- **I campi accumulati in GRIB2 richiedono il product definition template 8.** Le loro
-  definizioni ECMWF impongono `typeOfStatisticalProcessing`, che nel template istantaneo non
-  esiste: `codes_set(paramId)` su un messaggio PDT 0 fallisce con "Key/value not found". Sono
-  scritti con reference time = 00Z del giorno e step `0-H`; `validityDate`/`validityTime`
-  risolvono comunque al timestep. **Un file mescola reference time diversi di proposito:
-  indicizzare sulla validità, mai su `dataTime`.**
-- **`10fg` è l'unica eccezione**: `WSPD10MAX` viene azzerata da WRF a ogni scrittura (verificato:
-  non è monotona fra ore consecutive), quindi è un massimo orario, scritto con reference time
-  H-1 e step `0-1`.
-- **`ACSNOM` non è un accumulatore monotono** (punti che si riazzerano dentro il run, misurato
-  -7,26 mm contro le 00Z): per questo `smlt` non viene prodotta.
-- **Aggiungere un nome a `accum_ref.ACCUMULATED_VARS` rende incompleti tutti i sidecar già
-  scritti** (`load_ref` solleva `KeyError`): quei giorni vanno ri-estratti dal wrfout 00Z. È già
-  successo con questo schema, quindi i sidecar vanno rigenerati insieme ai GRIB.
+**`tvl` è mascherato dove domina lo shrubland** (124 672 celle, 15.8 % di quelle con `cvl>0`,
+Iberia e margine nordafricano): MODIS non porta la fenologia degli arbusti mentre la 4.234 separa
+sempreverdi (16) da caducifogli (17), e si è scelto di non inventare. `cvl` dà comunque la
+copertura. **`dl` è mascherato fuori dai laghi**: `LAKE_DEPTH` vale 10.0 m su **99.56 %** del
+dominio, che è il riempimento di default di WPS.
 
-## 4. Costi misurati (1 core DCGP)
+Non pubblicati: `lai_lv`/`lai_hv` (il modello porta un solo LAI per cella) e `anor`/`isor`
+(`OA`/`OL` non sono l'angolo e l'anisotropia di ECMWF).
 
-| | GRIB1 | 182 msg | **246 msg** |
-|---|---|---|---|
-| messaggi | 93 | 182 | **246** |
-| dimensione | 388 MB | 663 MB | **761 MB** (14Z estivo) · 661 MB (00Z) · 784 MB (marzo) |
-| media pesata sul giorno | — | ~673 MB | **~767 MB → 19 GB/giorno, ~7,0 TB/anno** |
-| tempo | ~7,5 min | ~2:47 | **~5:15** |
-| picco RAM | — | 18,2 GB | **19,0 GB** (`slurm.step_convert_mem: 32G`, la RAM non è fatturata) |
+## 3. `skt` NON è stato toccato — e la ragione conta
 
-Misurato il 2026-09-17 su `wrfout_share/2024-07-01` (00Z e 14Z) e `wrfout_2024fill/2024-03-20`
-(12Z). Le 4380 ore già su disco costano quindi ~3,4 TB e ~380 core-ora.
+Pesare l'emissività su `LANDUSEF` sembrava il miglioramento ovvio. **È una regressione, misurata:**
 
-**Livelli di pressione: restano 13.** I 37 livelli ERA5 sono stati valutati e scartati: 8 sono
-sopra il tetto del modello (`P_TOP` = 50 hPa, livello di massa più alto 51,9 hPa) e quindi
-impossibili, e i 29 fattibili porterebbero il file orario a ~1,45 GB e l'anno a 18,1 TB.
+| emissività | RMSE vs `SOILT1` | gate mare aperto `max\|skt−SST\|` |
+|---|---|---|
+| `EMISSMIN[IVGTYP]` (attuale) | 7.369 K | **0.0015 K** |
+| pesata su `LANDUSEF` | 7.366 K | **0.98 K** ← rompe il gate |
+| `EMISSMIN + shdfac·(EMISSMAX−EMISSMIN)` | 7.187 K | 0.0015 K |
 
-## 5. Come far ripartire la pipeline (SOLO dopo il via)
+Con `sf_surface_physics=3` WRF non vede mai `LANDUSEF` a runtime: cerca l'emissività per
+categoria **dominante**. Invertire con una emissività "più realistica" è meno fedele
+all'inversione. Il miglioramento che esiste davvero non ha bisogno del geo_em — è
+l'interpolazione sulla green fraction, la formula con cui WRF stesso inizializza `EMISS` — e
+**non è ancora adottato**: va misurato di notte, dove `SOILT1` è confrontabile con la pelle (alle
+14Z il bias di +6 K è fisica, non errore).
 
-L'output va in un albero **nuovo**, `grib_v2/` (già impostato in `conf/pipeline.yaml`): la
-re-entrancy di `convert_step.sh` si basa sull'esistenza del GRIB di output, quindi scrivere lo
-schema nuovo dentro `grib/` salterebbe in silenzio ogni ora già convertita. `grib/` si cancella
-a validazione finita.
+## 4. Costo misurato
 
-Ordine consigliato:
+| | 231 messaggi | 246 messaggi |
+|---|---|---|
+| file orario | 710.4 MB | **749.6 MB** (+39.2 MB, +5.5 %) |
+| giorno | 17.0 GB | **17.9 GB** |
+| anno | 6.20 TB | **6.55 TB** |
+| tempo / RAM su 1 core DCGP | ~5 min / 19.0 GB | **~6 min / 19.9 GB** |
 
-1. **Le 4380 ore già su disco**, in un colpo solo: `bash hpc/run_share_conversion.sh` da un
-   **nodo di login normale** copre ora tutte e tre le finestre (`wrfout_share` 2024, poi
-   `wrfout_share` 2019, poi `wrfout_2024fill` 2024-03-18..03-31), ciascuna con la propria
-   directory di wrfout nella tabella `WINDOWS`. `keep_wrfout=true`, gate 48, nessuna
-   cancellazione. Unico accorgimento: 2024-03-18 non ha il suo 00Z su disco, quindi `ensure_ref`
-   se lo scarica dal relay (un file, ~9 GB).
-   I sidecar vanno nel tree **nuovo** `accum_ref_v2` (già in `conf/pipeline.yaml`): i 520 vecchi
-   contengono 6 variabili contro le 19 che servono ora, e `ensure_ref` si fida di qualunque
-   sidecar non vuoto trovi.
-2. **8424 ore da ri-scaricare** (~77 TB, ~5 giorni di datamover) a blocchi mensili.
-   **Prima serve uno scan/recall da nastro su LRZ** (`hpc/lrz/chapter_scan.sh`, poi
-   `chapter_recall.sh` mese per mese): molti wrfout già cancellati sono tornati su tape.
-4. Il resto mai iniziato (buco 2024, 2025 H2, 2019 completo) con `hpc/run_2024_fill.sh`.
+L'aggiunta è piatta nel tempo (sette campi costanti, otto che variano poco). `step_convert_mem:
+32G` resta giusto. Misure su tre file reali: 749.6 MB (luglio 14Z), 650.3 MB (00Z), 772.4 MB
+(marzo 12Z).
 
-Gli stop flag di `fill2024` sono tutti presenti: vanno rimossi solo al punto 4, e
-`PHASES_ONLY` resta obbligatorio (vedi `CLAUDE.md`).
+## 5. Verifiche fatte
 
-## 6. Decisioni chiuse e ancora aperte
+Tutte passate, seguendo i quattro passi di `CLAUDE.md`:
 
-Chiuse in questa sessione: 13 livelli di pressione; `10efg`/`10nfg` e TKE fuori; `cp`/`csf`
-fuori perché morte; vegetazione separata alta/bassa; `fal` con bitmap di notte; `cvl`/`cvh` da
-`VEGFRA` orario; wind shear bulk 10→100 m. **`geo_em_d02` è irrecuperabile** (già chiesto a
-LRZ): il land cover frazionario esce definitivamente dalle cose ottenibili.
+- `--debug-vars` sui 15 campi: la cache 3D viene saltata (fix di `flat_only`, prima ogni campo
+  derivato di superficie leggeva 2.6 GB inutilmente);
+- tre conversioni complete come job SLURM: **246 messaggi** ciascuna, luglio 14Z / 00Z / marzo;
+- `check_grib_sanity.py`: `checked=3 bad=0`;
+- suolo ricalcolato indipendentemente in numpy: concordanza relativa **1.5e-8**;
+- maschera del suolo == terra della `lsm` **oraria**, e si muove davvero: 1 304 109 punti a luglio,
+  1 306 578 a marzo, differenza **2469** — esattamente i punti di ghiaccio marino documentati;
+- statiche **identiche byte a byte** fra un file di luglio e uno di marzo, mentre `lsm` no;
+- `cvl+cvh+(classi né l'una né l'altra) == 1` a 1.9e-7; `dl` presente su esattamente 88 785 celle;
+- 00Z: accumulazioni ancora esattamente zero;
+- additività: 231 messaggi preesistenti invariati.
 
-Ancora aperte:
+Un dettaglio trovato strada facendo: `CLAYFRAC` ha un picco esattamente su 0.35 che in float64
+legge 34.999999 e cadeva dal lato sbagliato della soglia FAO dei 35 %, spostando 3922 celle da
+*fine* a *medium*. Risolto arrotondando a 1e-4 punti percentuali, più fine della spaziatura del
+dato stesso (~4e-4).
 
-1. `MISSING_VARIABLES.pdf` è da sottoporre ai colleghi.
-2. `mucape`/`mucin`: i punti indefiniti sono scritti come 0 (non come mancanti) per tenere i
-   campi densi. Da confermare con chi userà i dati.
-3. `tsn` è mascherata a `SNOWC > 0.9` (≈ SWE 29 mm), scelta con l'utente il 2026-09-17 dopo una
-   misura su 36 file in tutti i mesi su disco: è l'unica soglia sotto cui il campo non supera mai
-   il punto di fusione (max 273,17 K ovunque, contro 282 K nella banda mosaico 0,5-0,9 e 310 K
-   sul suolo nudo). D'estate la maschera è vuota — tutta l'estate 2019 non ha un punto innevato —
-   e il messaggio esce interamente mancante: verificato che si codifica e si rilegge senza errori
-   (`grid_ccsds`, 277 kB). ERA5 per convenzione non maschera `tsn` e lascia il filtro `sd > 0`
-   all'utente: qui si è preferito l'archivio fisicamente corretto, rimandando l'eventuale
-   riempimento alla ricetta Anemoi, dove le statistiche per variabile non tollerano NaN.
-4. **Nessun wrfout va cancellato** finché l'utente non lo dice: `wrfout_share` deve ancora essere
-   copiato dal collega, e la cancellazione di `wrfout_2024fill` è sospesa. Sono 37 TB.
+## 6. Cosa c'è di nuovo nel repo
+
+- **`static_ref.py`** — legge `geo_em.d02` una volta e scrive `static_v1/chapter_static_d02.npz`
+  (1.8 MB). **Tutte le decisioni di mapping stanno qui**, non nel converter. `--check-wrfout`
+  testa l'assunzione e si rifiuta di scrivere se le griglie differiscono.
+- **`hpc/grib_schema_ok.py`** — conta i messaggi camminando sulle intestazioni GRIB, senza
+  eccodes né numpy (i tool `grib_*` non esistono in questa installazione spack). Serve allo
+  **skip sensibile al contenuto**: i job di convert ora saltano un output solo se ha
+  `EXPECTED_MESSAGES` messaggi, quindi un cambio di schema si auto-ripara e non serve più un
+  albero nuovo ogni volta.
+- Registry, converter, `convert_step.sh`/`convert_day.sh`, `fetch_step.sh`,
+  `submit_step_pipeline.py`, `conf/pipeline.yaml` (`grib_dir` → **`grib_v3`**, nuovo
+  `static_ref_dir`), `check_grib_sanity.py` (`STATIC` esteso), e la documentazione
+  (`CHAPTER_VARIABLES.md` §8 con le tabelle di traduzione, `MISSING_VARIABLES.md`, `CLAUDE.md`).
+
+**`accum_ref_v2` non è stato rinominato** e non va rinominato: non si aggiunge nessun
+accumulatore, i 223 sidecar restano validi, e passare a `_v3` costringerebbe a riscaricare
+wrfout 00Z che non esistono più. La versione del sidecar insegue `ACCUMULATED_VARS`, quella
+dell'albero insegue lo schema dei messaggi.
+
+## 7. Stato operativo e ordine di ripartenza
+
+**Fermato il 2026-09-18 alle 17:15**, prima di toccare il repo (lezione dei null byte, commit
+`de63194`): stop flag `rebuild_r24_02_cv.stop`, `rebuild_r24_03_dl.stop`,
+`rebuild_sequence.stop`; coda `conv_` scesa a 0 e driver tutti morti prima della prima modifica.
+Gli stop flag di `fill2024` sono rimasti dove erano.
+
+Cosa c'era a quel punto: **5291 file in `grib_v2`** a 231 messaggi (2019-06/09, 2024-01/02/03 e
+06/09), `wrfout_rebuild` con ~600 wrfout staged, quota a 55 TB su 100.
+
+**Ordine di ripartenza — nessuno di questi passi è stato eseguito:**
+
+1. **`wrfout_rebuild`, ~600 ore, gratis.** Già a disco. Convertirle per prime in `grib_v3` con
+   `keep_wrfout=true`: validazione end-to-end su scala, zero datamover.
+2. **Le ~4392 ore a disco, zero download.** `hpc/run_share_conversion.sh`: `wrfout_share`
+   (2019-06-17..09-06 e 2024-06-18..09-12) e `wrfout_2024fill` (2024-03-18..03-31).
+   `keep_wrfout=true`, gate 48. ~370 core-ora. **Non si cancella niente.**
+3. **Le ~900 ore i cui wrfout sono spariti** (2019-09-07..09, 2024-01, parte di 2024-02):
+   riscarico, ~8 TB dal relay. La lista si ricostruisce da `logs/freeze_staged.txt` e dal ledger
+   `rebuild_r24_02_cv_status.log`, **non** dai confini di fase. `PHASES_ONLY` obbligatorio.
+4. **Il resto** (resto di 2019 e 2024, 2025-H1) su `hpc/run_year_rebuild.sh`.
+
+`grib_v2` si cancella **solo** quando `grib_v3` ha passato `check_grib_sanity` sullo stesso
+insieme di file: è l'unica copia di quelle ~900 ore i cui wrfout non esistono più.
+
+## 8. Decisioni aperte
+
+1. **La misura notturna su `skt`** (§3): due righe di modifica, da chiudere prima della
+   ripartenza se si vuole approfittarne.
+2. `MISSING_VARIABLES.pdf` e `CHAPTER_VARIABLES.pdf` sono da sottoporre ai colleghi; il §6.1 del
+   primo chiede conferma proprio sulla lista land-surface, che ora è quasi completa.
+3. `mucape`/`mucin`: i punti indefiniti sono scritti come 0, non come mancanti. Da confermare.
+4. Il geo_em è datato 2022-12-31 18Z e l'archivio arriva al 2025: **ripetere `--check-wrfout` sul
+   primo wrfout 2025 disponibile** prima di fidarsi delle statiche per quell'anno.

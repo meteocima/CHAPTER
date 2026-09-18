@@ -63,10 +63,12 @@ them will be written to the GRIB files.
 ## 3. Variables we can obtain by another route
 
 These are not in the model output, but there is a defensible way to get them. None of them is
-implemented: each needs a decision first. Two items that appeared here in the previous version
-have moved: **surface albedo is now delivered** (`al`, the snow-free background, and `fal`, the
-actual all-sky ratio), and **fractional land cover has moved to §4**, because the static file it
-would have come from turned out to be irrecoverable.
+implemented: each needs a decision first. Items that appeared here in previous versions have
+moved: **surface albedo is now delivered** (`al`, the snow-free background, and `fal`, the
+actual all-sky ratio), and **fractional land cover is now delivered too** — the static file
+`geo_em.d02`, recorded here as irrecoverable, was obtained from LRZ on 2026-09-18 and is the
+run's own (its land use agrees with the model's dominant category on 100.00 % of points once
+the lake recode is excluded). It brought `cvl`, `cvh`, `tvl`, `tvh`, `slt`, `cl` and `dl`.
 
 | variable | route | confidence | cost |
 |---|---|---|---|
@@ -80,7 +82,6 @@ would have come from turned out to be irrecoverable.
 
 | variable | why | the only way to get it |
 |---|---|---|
-| **Fractional land cover** (forest, crops, urban as fractions), `GREENFRAC`, soil texture fractions | They live in the WRF static file `geo_em_d02`, which is not part of the hourly output. That file was written to a scratch directory that has since been deleted, and it is no longer available from LRZ either — it was asked for | Re-running the WPS pre-processor (`geogrid`) with the original namelist and the ~50 GB public terrestrial dataset. The domain itself is exactly reconstructable from the wrfout attributes, so this is feasible but it is a separate exercise. What we deliver instead is the **dominant** category per grid point: 19.5 % of the land is forest, 38.2 % cropland, 1.5 % urban |
 | **`10efg`, `10nfg`** (eastward / northward gust components) | Only a gust *magnitude* proxy exists (see §5), and it is the maximum of the resolved wind, not a gust scheme. Their direction would have to be assumed equal to the mean wind, at an instant that does not even coincide with the maximum | Decomposing the magnitude along the 10 m wind is possible and cheap, but it was judged too weak to publish under ERA5 names, so **it was decided not to produce them** |
 | **TKE** (at any level) | The PBL scheme is YSU, which is non-local and carries no turbulent kinetic energy; the diffusion option does not produce one either. The field does not exist, at any height | Re-run WRF with a TKE-carrying PBL scheme (MYNN or MYJ). A similarity-theory estimate would need boundary-layer height *and* surface heat flux, both themselves missing, so the errors compound: it would look plausible but would not be consistent with the simulation |
 | **Significant wave height, mean wave period, wave direction** | No wave model was coupled to the atmosphere | A wave model run, or an external wave reanalysis (ERA5 waves at ~31 km) — which loses exactly the coastal detail that motivates a 3 km product |
@@ -94,17 +95,23 @@ would have come from turned out to be irrecoverable.
 
 ---
 
-Dropped on 2026-09-17 rather than published under a name that would mislead:
+Dropped on 2026-09-17 and **reinstated on 2026-09-18**, once the objection had an answer:
 
-| Variable | Why it was dropped |
+| Variable | Why it was dropped | Why it is now published |
+|---|---|---|
+| **Soil moisture and soil temperature** (`swvl1-4`, `stl1-4`) | The scheme carries point values at 0, 5, 20, 40, 160 and 300 cm; ERA5's four layers are averages over 0-7, 7-28, 28-100 and 100-289 cm | The objection was against *relabelling* the point values, and it stands. But they can be **integrated**: the scheme is a level scheme with a linear profile between nodes, and ERA5's whole column lies inside those nodes (289 cm is above the deepest, 0 cm is the first), so each layer is the exact integral and nothing is extrapolated |
+| **Vegetation and soil type** (`tvl`, `tvh`, `slt`) | The categories are WRF's MODIS-IGBP and STATSGO ones, while those paramIds carry ECMWF's own code tables | `slt` is no longer a translation at all: ECMWF's seven types are *defined* by clay/sand thresholds, and the recovered static file carries clay and sand fractions, so the definition is applied directly. `tvl`/`tvh` do use a table, published in full in `CHAPTER_VARIABLES.pdf` §8; every row is a semantic identity, and the one question MODIS cannot answer (evergreen vs deciduous shrubs) is left **missing** rather than guessed |
+| **Vegetation cover** (`cvl`, `cvh`) | They rested on one dominant category per cell, while ERA5 lets low and high vegetation coexist | The recovered static file has the fractional cover, so they are simple sums over the low and high classes — the same quantity ERA5 means. This was the right objection: 17.9 % of land cells carry both above 5 %, and the dominant category holds only 90.1 % of a cell on average |
+
+Still not published:
+
+| Variable | Why |
 |---|---|
-| **Soil moisture and soil temperature** (`swvl1-4`, `stl1-4`) | The land-surface scheme carries point values at 0, 5, 20, 40, 160 and 300 cm; ERA5's four layers are averages over 0-7, 7-28, 28-100 and 100-289 cm. The first four RUC levels under the ERA5 names would put a 40 cm value where the name means 1-2.9 m, and the mismatch grows with depth |
-| **Vegetation and soil type** (`tvl`, `tvh`, `slt`) | The categories are WRF's MODIS-IGBP and STATSGO ones, while those paramIds carry ECMWF's own code tables: code 1 reads as "crops" in table 4.234 and means "evergreen needleleaf forest" here. A translation table could be built, but it would be our invention, not the model's |
-| **Vegetation cover and LAI** (`cvl`, `cvh`, `lai_lv`, `lai_hv`) | All rest on one dominant category per cell, while ERA5 lets low and high vegetation coexist in the same box; and the model's vegetation fraction is a seasonal *green* fraction, not a static cover fraction. The model also carries a single LAI, not one per vegetation class |
+| **`lai_lv`, `lai_hv`** | The model carries a single LAI per cell; ERA5 wants one per vegetation class, defined per unit of vegetated area. Any split between the two would be our assumption. The model's own LAI can be delivered under its own name if wanted |
+| **`anor`, `isor`** | The static file carries the Kim-Arakawa asymmetry and effective-length parameters. ECMWF's angle and anisotropy come from the eigenstructure of the terrain-gradient covariance: related, not the same, and the difference does not fit in one line |
 
-If any of these is needed, say so: the underlying WRF fields exist and can be delivered under
-their own names (`SMOIS`, `TSLB`, `IVGTYP`, `ISLTYP`, `VEGFRA`, `LAI`), with their own depths and
-their own code tables, where nothing is being claimed about ERA5 equivalence.
+If either is needed, say so: the underlying WRF fields exist and can be delivered under their
+own names (`LAI`, `VEGFRA`, `OA1-4`, `OL1-4`), where nothing is claimed about ERA5 equivalence.
 
 ## 5. Caveats on the variables we *do* provide
 
@@ -179,17 +186,20 @@ These matter for correct use and should be read together with the variable list.
 ## 6. What we need from you
 
 The questions about the gust components and about TKE that appeared here previously have been
-settled: neither is produced. The one about requesting the static `geo_em` file is also closed —
-the file is gone (§4).
+settled: neither is produced. The one about the static `geo_em` file is also closed, but the
+other way round from what this document said last: the file **was** obtained from LRZ on
+2026-09-18, and everything that depended on it is now delivered (§3, §4).
 
-1. **The land-surface list.** The original proposal was lost. We deliver the subset that exists in
-   the output, under ERA5 names: soil moisture and soil temperature (4 layers), snow depth,
+1. **The land-surface list.** The original proposal was lost. We deliver, under ERA5 names:
+   soil moisture and soil temperature (**4 layers, as true ERA5 layer averages**), snow depth,
    density, cover and temperature, snowfall, surface, sub-surface and total runoff, skin reservoir
-   content, high and low vegetation cover, leaf area index and type, soil type, friction velocity,
-   surface roughness, the two surface albedos, the two components of surface stress, and the
-   complete radiation budget (downward, net and clear-sky, at the surface and at the top of the
-   atmosphere). **Snowmelt is not among them**: the field exists but is not a monotone accumulator,
-   see §4. Please confirm or amend.
+   content, **high and low vegetation cover and type**, **soil type**, **lake cover and depth**,
+   friction velocity, surface roughness, the two surface albedos, the two components of surface
+   stress, and the complete radiation budget (downward, net and clear-sky, at the surface and at
+   the top of the atmosphere). Two items of the original list are **not** among them: **leaf area
+   index**, because the model carries one value per cell and ERA5 wants one per vegetation class
+   (§4), and **snowmelt**, because the field exists but is not a monotone accumulator (§4).
+   Please confirm or amend.
 2. **Wind shear: which definition?** We currently deliver the bulk 10 m to 100 m shear. Any other
    definition (fixed layers, per pressure level, 0-6 km bulk) is a one-line change, but it has to
    be decided before the archive is re-converted.

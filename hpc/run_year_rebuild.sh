@@ -294,7 +294,7 @@ for pend in "${CV_PENDING[@]}"; do
     log "REPORT | ${label}: $(grep '^# summary' "$rep")"
 done
 for y in 2019 2024 2025; do
-    log "GRIB_COUNT | ${y}: $(find "${W}/grib_v2/${y}" -name '*.grib' 2>/dev/null | wc -l)"
+    log "GRIB_COUNT | ${y}: $(find "${W}/grib_v3/${y}" -name '*.grib' 2>/dev/null | wc -l)"
 done
 log "STAGING_LEFT | $(find "${STAGING_DIR}" -name 'wrfout_d02_*' -type f | wc -l) wrfout still in ${STAGING_DIR}, $(used_tb) TB used"
 

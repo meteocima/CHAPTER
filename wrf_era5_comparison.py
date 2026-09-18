@@ -29,9 +29,12 @@ in MISSING_VARIABLES.md together with the routes by which some of them could
 still be obtained. The short list:
 
 * not in the run at all: TKE and PBLH (the PBL scheme is YSU, non-local), TSK,
-  HFX/LH, ALBEDO, LANDUSEF/GREENFRAC/SOILCTOP (they live in geo_em_d02, which
-  is irrecoverable -- already requested from LRZ), and everything to do with
-  ocean waves, currents and sea-ice properties (no ocean or wave coupling);
+  HFX/LH, ALBEDO, and everything to do with ocean waves, currents and sea-ice
+  properties (no ocean or wave coupling);
+* not in the hourly output but recovered from the WPS static file geo_em_d02,
+  which arrived from LRZ on 2026-09-18 after this file had recorded it as lost:
+  LANDUSEF/SOILCTOP/CLAYFRAC/SANDFRAC/LAKE_DEPTH, hence cvl/cvh/tvl/tvh/slt/
+  cl/dl. GREENFRAC came with them but has no ERA5 parameter;
 * present but identically zero on every sampled timestep: ACHFX, ACLHF,
   ACGRDFLX, NOAHRES, SSTSK, SST_INPUT, SWNORM, ACSNOW, HAILNC, ACLWDNT, and --
   because CU_PHYSICS=0 -- RAINC/RAINSH/PREC_ACC_C, hence no `cp` and no `csf`;
@@ -39,10 +42,12 @@ still be obtained. The short list:
   REFL_10CM/REFD_MAX/UP_HELI_MAX/W_UP_MAX/LPI/HAIL_MAX2D, SR, RHOSNF,
   SNOWFALLAC (snow DEPTH, not water equivalent), Q2, SH2O, TMN, SHDMAX/SHDMIN;
 * redundant: ACRUNOFF (verified identical to SFROFF, not the total), `lsp`
-  (identical to tp since RAINC is zero), `cl` (every lake point is already
-  water in lsm), SNOALB (an annual climatological cap, not ERA5's `asn`);
+  (identical to tp since RAINC is zero), SNOALB (an annual climatological cap,
+  not ERA5's `asn`);
 * excluded by decision: the gust components 10efg/10nfg (only a resolved-wind
-  maximum exists, so their direction would be an assumption).
+  maximum exists, so their direction would be an assumption); lai_lv/lai_hv,
+  because the model carries a single LAI per cell while ERA5 wants one per
+  vegetation class, and any split between the two would be our assumption.
 """
 
 # Pressure levels shared with convert_to_pressure_levels.PRESSURE_LEVELS.
@@ -54,6 +59,9 @@ _ATM = dict(levelType='entireAtmosphere', levels=[0])
 # Top of atmosphere: leave the level alone so eccodes applies the `nominalTop`
 # that the parameter definition prescribes (tsr, ttr, tisr, tsrc, ttrc).
 _TOP = dict(levelType=None, levels=[None])
+# Lake depth: same trick, so eccodes applies the `entireLake` surface its own
+# definition prescribes (verified on read-back).
+_LAKE = dict(levelType=None, levels=[None])
 
 
 def _h(z):
@@ -133,14 +141,46 @@ WRF_TO_ECMWF_PARAMID = {
     'SST':      {'shortName': 'sst',  'paramId': 34,     'long_name': 'Sea surface temperature', 'units': 'K', **_SFC},
     'SEAICE':   {'shortName': 'ci',   'paramId': 31,     'long_name': 'Sea ice area fraction', 'units': '(0-1)', **_SFC},
 
-    # ---------------- land surface (ERA5 names for the fields we have) ----------------
-    # NOT produced: tvl, tvh, slt, cvl, cvh, lai_lv, lai_hv.
-    # tvl/tvh/slt would carry WRF's MODIS-IGBP and STATSGO category numbers under
-    # paramIds whose code tables are ECMWF's own: code 1 means "crops" to a reader
-    # of table 4.234 and "evergreen needleleaf forest" to us. cvl/cvh/lai_lv/lai_hv
-    # all rest on the same assumption -- one dominant category per cell -- while
-    # ERA5 lets low and high vegetation coexist, and VEGFRA is a seasonal GREEN
-    # fraction, not a static cover fraction. Dropped (decision 2026-09-17).
+    # ---------------- land surface, static (from geo_em.d02) ----------------
+    # These seven were dropped on 2026-09-17 for want of the fractional cover,
+    # which lives in geo_em_d02 -- recovered from LRZ on 2026-09-18, after this
+    # file had recorded it as irrecoverable. The hourly wrfout carry only the
+    # DOMINANT category, and over this domain that category holds just 90.1% of
+    # a land cell on average while 17.9% of land cells carry both high and low
+    # vegetation above 5%: a state one category per cell cannot express at all.
+    # Every mapping decision lives in static_ref.py, which writes the sidecar
+    # these are filled from; the sidecar meta records the table that produced
+    # the numbers. Verified: LU_INDEX agrees with the wrfout IVGTYP on 100.00%
+    # of points once the lake recode (sf_lake_physics=0) is excluded.
+    'cvl':  {'shortName': 'cvl',  'paramId': 27,     'long_name': 'Low vegetation cover', 'units': '(0-1)', **_SFC},
+    'cvh':  {'shortName': 'cvh',  'paramId': 28,     'long_name': 'High vegetation cover', 'units': '(0-1)', **_SFC},
+    # The dominant low/high MODIS-IGBP class translated to ECMWF code table
+    # 4.234 (static_ref.VEG_TYPE_4234). Every row of that table is a semantic
+    # identity -- the ECMWF type names the same vegetation as the MODIS class --
+    # with one exception: MODIS carries no shrub phenology while 4.234 splits
+    # evergreen (16) from deciduous (17) shrubs. Rather than invent one, tvl is
+    # MISSING where a shrubland dominates the low cover (124672 cells, 15.8% of
+    # those with cvl > 0, essentially Iberia and the North African margin); cvl
+    # still carries the cover there. tvh needs no mask.
+    'tvl':  {'shortName': 'tvl',  'paramId': 29,     'long_name': 'Type of low vegetation (ECMWF code table 4.234)', 'units': '~', **_SFC},
+    'tvh':  {'shortName': 'tvh',  'paramId': 30,     'long_name': 'Type of high vegetation (ECMWF code table 4.234)', 'units': '~', **_SFC},
+    # Computed with the FAO clay/sand thresholds that DEFINE ECMWF's seven soil
+    # types, applied to geo_em's CLAYFRAC/SANDFRAC -- so the quantity IS the
+    # ERA5 one, where translating STATSGO category numbers would have been our
+    # invention. Every land point classifies; type 7 (tropical organic) never
+    # occurs here. One collision to know about: eccodes resolves slt to
+    # discipline 2/3/0, which WMO table 4.213 reads as a different 11-value
+    # list. This archive is ECMWF semantics throughout, and so is this message.
+    'slt':  {'shortName': 'slt',  'paramId': 43,     'long_name': 'Soil type (ECMWF 7 classes)', 'units': '~', **_SFC},
+    # cl is NOT redundant with lsm, as an earlier note in this file claimed:
+    # 19309 cells with LANDMASK=1 carry a sub-grid lake, and WRF discarded the
+    # class at runtime (sf_lake_physics=0 recodes 21 -> 17). dl is the GLDB
+    # depth that came with it, masked off-lake -- LAKE_DEPTH is the 10 m WPS
+    # default fill on 99.56% of the domain, so unmasked it would ship a fake
+    # lake everywhere. No model state responds to either: they are boundary
+    # data, published as such.
+    'cl':   {'shortName': 'cl',   'paramId': 26,     'long_name': 'Lake cover', 'units': '(0-1)', **_SFC},
+    'dl':   {'shortName': 'dl',   'paramId': 228007, 'long_name': 'Lake total depth', 'units': 'm', **_LAKE},
 
     'ALBBCK':  {'shortName': 'al',     'paramId': 174,    'long_name': 'Albedo (climatological, snow-free background)', 'units': '(0-1)', **_SFC},
     # Actual all-sky albedo; undefined at night -> written as a bitmap there.
@@ -162,11 +202,26 @@ WRF_TO_ECMWF_PARAMID = {
     # season the message is legitimately empty: summer 2019 has no such point.
     'tsn':     {'shortName': 'tsn',    'paramId': 238,    'long_name': 'Temperature of snow layer', 'units': 'K', **_SFC},
     'CANWAT':  {'shortName': 'src',    'paramId': 198,    'long_name': 'Skin reservoir content', 'units': 'm', **_SFC},
-    # NOT produced: swvl1-4 / stl1-4. RUC carries point values at 0, 5, 20, 40,
-    # 160 and 300 cm; ERA5's four layers are averages over 0-7, 7-28, 28-100 and
-    # 100-289 cm. Writing the first four RUC levels under the ERA5 names put a
-    # 40 cm value under a name that means 1-2.9 m, and the mismatch grows with
-    # depth, so the whole soil block was dropped (decision 2026-09-17).
+    # ---------------- soil: ERA5 layer averages of the RUC profile ----------
+    # Dropped on 2026-09-17, and rightly so: RUC's point values at 0, 5, 20, 40,
+    # 160 and 300 cm are not ERA5's averages over 0-7, 7-28, 28-100 and
+    # 100-289 cm. But they can be integrated into them. The whole ERA5 column
+    # lies INSIDE the RUC nodes -- 289 cm is above the deepest node, 0 cm is the
+    # first one -- so each layer average is the exact integral of RUC's own
+    # piecewise-linear profile and nothing is extrapolated anywhere. The 4x6
+    # weight matrix is in convert_to_pressure_levels.SOIL_LAYER_WEIGHTS.
+    # swvl uses SMOIS (total water, liquid + ice), which is what swvl means;
+    # SH2O is the liquid part only. Masked over water, where RUC integrates no
+    # soil column -- and that mask MOVES, because the sea-ice reclassification
+    # turns ~2469 sea points into land between seasons.
+    'swvl1': {'shortName': 'swvl1', 'paramId': 39,  'long_name': 'Volumetric soil water layer 1 (0-7 cm)', 'units': 'm^3/m^3', **_SFC},
+    'swvl2': {'shortName': 'swvl2', 'paramId': 40,  'long_name': 'Volumetric soil water layer 2 (7-28 cm)', 'units': 'm^3/m^3', **_SFC},
+    'swvl3': {'shortName': 'swvl3', 'paramId': 41,  'long_name': 'Volumetric soil water layer 3 (28-100 cm)', 'units': 'm^3/m^3', **_SFC},
+    'swvl4': {'shortName': 'swvl4', 'paramId': 42,  'long_name': 'Volumetric soil water layer 4 (100-289 cm)', 'units': 'm^3/m^3', **_SFC},
+    'stl1':  {'shortName': 'stl1',  'paramId': 139, 'long_name': 'Soil temperature level 1 (0-7 cm)', 'units': 'K', **_SFC},
+    'stl2':  {'shortName': 'stl2',  'paramId': 170, 'long_name': 'Soil temperature level 2 (7-28 cm)', 'units': 'K', **_SFC},
+    'stl3':  {'shortName': 'stl3',  'paramId': 183, 'long_name': 'Soil temperature level 3 (28-100 cm)', 'units': 'K', **_SFC},
+    'stl4':  {'shortName': 'stl4',  'paramId': 236, 'long_name': 'Soil temperature level 4 (100-289 cm)', 'units': 'K', **_SFC},
 
     # ---------------- accumulated since 00Z of the same day ----------------
     'RAINNC':  {'shortName': 'tp',   'paramId': 228,    'long_name': 'Total precipitation', 'units': 'm', 'stepType': 'accum', **_SFC},

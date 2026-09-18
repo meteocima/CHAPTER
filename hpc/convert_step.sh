@@ -5,7 +5,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --job-name=chapter_conv_step
 #
-# Convert a single hourly wrfout to GRIB1 format (single timestep, non-array).
+# Convert a single hourly wrfout to GRIB2 format (single timestep, non-array).
 # Submitted by hpc/fetch_step.sh once the wrfout for the timestep has been fetched.
 # Runs on a compute node (e.g. dcgp_usr_prod); no network access required.
 #
@@ -18,6 +18,8 @@
 #   GRIB_TEMPLATE - output filename template (Python .format() style)
 #   ACCUM_REF_DIR - (optional) 00Z reference sidecars for accumulated fields
 #                   (accum_ref.py); default: <GRIB_DIR>/../accum_ref
+#   STATIC_REF_DIR- (optional) geo_em sidecar for the static land fields
+#                   (static_ref.py); default: <GRIB_DIR>/../static_v1
 #   KEEP_WRFOUT   - (optional) "1" to keep the input wrfout after a successful convert
 
 set -euo pipefail
@@ -38,6 +40,8 @@ mkdir -p "$(dirname "${OUTPUT}")"
 # tp is referred to 00Z of the same day: the 00Z fields live in this sidecar
 ACCUM_REF_DIR="${ACCUM_REF_DIR:-$(dirname "${GRIB_DIR%/}")/accum_ref}"
 ACCUM_REF="${ACCUM_REF_DIR}/${YEAR}/${MONTH}/accum_ref_${DATE_COMPACT}.npz"
+# cvl/cvh/tvl/tvh/slt/cl/dl come from geo_em, read once into this sidecar
+STATIC_REF_DIR="${STATIC_REF_DIR:-$(dirname "${GRIB_DIR%/}")/static_v1}"
 TMPOUT="${OUTPUT}.tmp"
 
 # Clean up partial output on failure
@@ -50,10 +54,17 @@ echo "Input:  ${INPUT}"
 echo "Output: ${OUTPUT}"
 echo ""
 
-# Re-entrancy: skip if output already exists
+# Re-entrancy: skip only if the existing output is at the CURRENT schema.
+# Keying the skip on the file merely EXISTING is what forced a new output tree
+# at every schema change (grib -> grib_v2 -> grib_v3), because a wider schema
+# written into the old tree silently skipped every hour already converted at
+# the narrower one. Counting the messages makes a re-run self-healing instead.
 if [ -f "${OUTPUT}" ]; then
-    echo "Output GRIB already exists, skipping."
-    exit 0
+    if SCHEMA=$(python3 "${PROJECT_DIR}/hpc/grib_schema_ok.py" "${OUTPUT}"); then
+        echo "Output GRIB already exists at the current schema (${SCHEMA}), skipping."
+        exit 0
+    fi
+    echo "SCHEMA_MISMATCH: ${OUTPUT} is ${SCHEMA} messages; reconverting."
 fi
 
 # Check input exists
@@ -74,7 +85,8 @@ export LD_LIBRARY_PATH="$GCC12_RT:$ECCODES_LIB:${LD_LIBRARY_PATH:-}"
 uv run python convert_to_pressure_levels.py \
     --input "${INPUT}" \
     --output "${TMPOUT}" \
-    --accum-ref-dir "${ACCUM_REF_DIR}"
+    --accum-ref-dir "${ACCUM_REF_DIR}" \
+    --static-ref-dir "${STATIC_REF_DIR}"
 
 # Atomic rename on success
 mv "${TMPOUT}" "${OUTPUT}"

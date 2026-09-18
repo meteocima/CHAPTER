@@ -166,6 +166,7 @@ def app(cfg: DictConfig):
     wrfout_dir = cfg.paths.wrfout_dir
     grib_dir = cfg.paths.grib_dir
     accum_ref_dir = cfg.paths.accum_ref_dir
+    static_ref_dir = cfg.paths.static_ref_dir
     log_dir = cfg.paths.log_dir
     grib_template = cfg.grib.name_template
     status_log = cfg.paths.status_log
@@ -224,6 +225,7 @@ def app(cfg: DictConfig):
         "GRIB_DIR": grib_dir,
         "GRIB_TEMPLATE": grib_template,
         "ACCUM_REF_DIR": accum_ref_dir,
+        "STATIC_REF_DIR": static_ref_dir,
         "PROJECT_DIR": project_dir,
         "DATAMOVER_HOST": cfg.datamover.host,
         "REMOTE_HOST": cfg.datamover.remote_host,

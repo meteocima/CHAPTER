@@ -41,8 +41,14 @@ for _info in WRF_TO_ECMWF_PARAMID.values():
 
 # Fields that are invariant in time and can never be all-zero over the domain.
 # (Not snowc, tsn, fal or ci: those are legitimately empty out of season or at
-# night.)
-STATIC = {'lsm', 'z', 'sdor', 'slor', 'skt', 'al'}
+# night.) The geo_em statics belong here because the domain always contains
+# vegetation, soil, lakes and a classified soil type; the eight soil layers
+# because even the driest STATSGO class has DRYSMC > 0 and every temperature is
+# in kelvin. Note the check reads the max of the PRESENT values under a bitmap,
+# which is what is wanted for the masked ones (tvl, slt, dl, swvl*, stl*).
+STATIC = {'lsm', 'z', 'sdor', 'slor', 'skt', 'al',
+          'cvl', 'cvh', 'tvl', 'tvh', 'slt', 'cl', 'dl',
+          'swvl1', 'swvl2', 'swvl3', 'swvl4', 'stl1', 'stl2', 'stl3', 'stl4'}
 TP_MARK = 128
 
 
@@ -84,7 +90,7 @@ def check(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('files', nargs='*')
-    ap.add_argument('--grib-dir', default='/leonardo_work/AIFPT_AILAMIT/CHAPTER/grib_v2')
+    ap.add_argument('--grib-dir', default='/leonardo_work/AIFPT_AILAMIT/CHAPTER/grib_v3')
     ap.add_argument('--month', action='append', default=[], help='YYYY-MM (repeatable)')
     ap.add_argument('--since-minutes', type=float, default=None,
                     help='with --month: only files modified in the last N minutes')

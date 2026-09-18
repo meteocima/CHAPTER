@@ -42,16 +42,25 @@ pipeline:
 paths:
   work_dir: /leonardo_work/AIFPT_AILAMIT/CHAPTER
   wrfout_dir: ${paths.work_dir}/wrfout
-  # GRIB2 schema (246 messages). Deliberately a different tree from the old
-  # GRIB1 `grib/`: convert_step.sh keys its re-entrancy on the output file
-  # existing, so writing the new schema into the old tree would silently skip
-  # every hour already converted. `grib/` is dropped once `grib_v2` is validated.
-  grib_dir: ${paths.work_dir}/grib_v2
+  # GRIB2 schema, 246 messages. A new tree at every schema change, for the same
+  # reason each time: convert_step.sh keys its re-entrancy on the output file
+  # existing, so writing a wider schema into the old tree would silently skip
+  # every hour already converted. `grib/` was GRIB1 (93 msgs), `grib_v2` GRIB2
+  # at 231, `grib_v3` adds the 15 fields geo_em.d02 unlocked (cvl/cvh/tvl/tvh/
+  # slt/cl/dl and the eight ERA5 soil layers). Each is dropped only once its
+  # successor has passed check_grib_sanity over the same file set.
+  grib_dir: ${paths.work_dir}/grib_v3
+  # Static land fields from the WPS file geo_em.d02, read once into a sidecar
+  # (see static_ref.py) instead of opening a 2.4 GB NetCDF per timestep. Unlike
+  # accum_ref this is a single file, not a per-day tree: geo_em is time-invariant.
+  static_ref_dir: ${paths.work_dir}/static_v1
   # 00Z reference sidecars for accumulated fields (tp is referred to 00Z of the same day;
   # see accum_ref.py). Shared by every chain: the 00Z wrfout is never deleted without it.
-  # `_v2` because the 246-message schema needs 19 accumulators instead of 12: a sidecar
+  # `_v2` because the GRIB2 schema needs 19 accumulators instead of 12: a sidecar
   # missing one makes load_ref raise, and ensure_ref trusts any non-empty sidecar it finds,
   # so the old tree has to stay out of the way (it still serves grib/ and fix_tp_accum.py).
+  # This version tracks ACCUMULATED_VARS, NOT the message schema: they move
+  # independently, which is why grib_v3 is paired with accum_ref_v2 and not _v3.
   accum_ref_dir: ${paths.work_dir}/accum_ref_v2
   log_dir: ${paths.work_dir}/logs
   status_log: ${paths.log_dir}/step_pipeline_status.log  # append-only step ledger (driver-written)
