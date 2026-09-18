@@ -59,41 +59,65 @@ dominio, che è il riempimento di default di WPS.
 Non pubblicati: `lai_lv`/`lai_hv` (il modello porta un solo LAI per cella) e `anor`/`isor`
 (`OA`/`OL` non sono l'angolo e l'anisotropia di ECMWF).
 
-## 3. `skt` NON è stato toccato — questione chiusa per misura
+## 3. `skt`: l'emissività è stata **misurata**, e ora skt è praticamente esatta
 
-L'emissività che WRF ha usato è stata **ricavata dai dati**, non scelta. La relazione
-`LWUPB − GLW = eps·(σT⁴ − GLW)` è una retta per l'origine la cui pendenza *è* l'emissività;
-adattata cella per cella su un ciclo diurno completo (12 istanti, luglio e marzo) risulta una
-**costante per categoria**: dispersione interna IQR 0.0005–0.0014, e luglio e marzo concordano a
-0.0005. Il controllo è esatto: sull'acqua, dove `TSK` è nota perché è la SST, lo stesso fit
-restituisce **0.97999** contro 0.980, R² = 1.000000.
+Non serviva scegliere fra ipotesi: l'emissività che WRF ha usato si legge dal file stesso.
+RRTMG calcola la diagnostica a cielo sereno con la *stessa* emissività e la *stessa* `TSK`,
+cambiando solo il flusso discendente:
 
-Due candidati sono stati **respinti**:
+```
+LWUPB  = eps·σT⁴ + (1−eps)·LWDNB
+LWUPBC = eps·σT⁴ + (1−eps)·LWDNBC     →     eps = 1 − (LWUPB−LWUPBC)/(LWDNB−LWDNBC)
+```
+
+`σT⁴` sparisce: è un'identità, non un fit, e non richiede nessuna temperatura di riferimento.
+Esiste ovunque ci siano nubi, cioè il 8–26 % della terra a ogni istante — abbastanza, su 32 file,
+per coprire ogni categoria presente. **Dispersione interna IQR 0.0000**: ogni cella di una
+categoria restituisce le stesse quattro cifre. Controllo esatto: sull'acqua, dove la risposta si
+conosce, restituisce **0.98000** con p5 = p95.
+
+Dieci categorie su quattordici coincidono con `EMISSMIN` di `VEGPARM.TBL`. **Quattro no, e RUC non
+le prende né da `VEGPARM.TBL` né da `LANDUSE.TBL`:**
+
+| categoria | misurata | EMISSMIN | errore su skt |
+|---|---|---|---|
+| 3 Deciduous Needleleaf Forest | 0.940 | 0.930 | +0.19 K |
+| 5 Mixed Forests | 0.940 | 0.930 | +0.19 K |
+| 7 Open Shrublands | **0.880** | 0.930 | **−0.96 K** |
+| 12 Croplands | 0.935 | 0.920 | +0.29 K |
+| 15 Snow and Ice | 0.980 | 0.950 | +0.56 K |
+| 16 Barren or Sparsely Vegetated | **0.850** | 0.900 | **−1.00 K** |
+
+Le due grosse pesano: il suolo nudo è un quarto del dominio per area, le colture un quinto.
+
+**La neve porta l'emissività a 0.98 secca in ogni categoria** — un interruttore, non una miscela.
+La regola migliore contro i valori esatti è: 0.98 da SNOWC ≥ 0.01 in su, miscela lineare sotto
+(97.96 % dei punti riprodotti a 1e-4, contro 95.32 % di una miscela pura). Cade quindi anche
+l'affermazione, che era in questi documenti, che sotto neve l'emissività non fosse ricostruibile.
+
+**Risultato**, misurato su file veri dopo la modifica:
+
+| | prima | dopo |
+|---|---|---|
+| emissività riprodotta a 1e-4 | 14.78 % dei punti | **97.96 %** |
+| errore su skt | 0.277 K RMSE | **0.032 K** |
+| skt contro la soluzione esatta, sui tre file di prova | — | entro 0.01 K sul **98.4–99.9 %** dei punti |
+| gate sul mare aperto `max\|skt−SST\|` | 0.0015 K | **0.0015 K** (invariato) |
+
+Tre ipotesi sono state **respinte per misura** — non riproporle:
 
 | ipotesi | perché cade |
 |---|---|
-| mix pesato su `LANDUSEF` | porta `max\|skt−SST\|` sul mare aperto da 0.0015 K a **0.98 K**. Con `sf_surface_physics=3` WRF non vede mai `LANDUSEF` a runtime |
-| `EMISSMIN + shdfac·(EMISSMAX−EMISSMIN)`, la formula con cui WRF stesso inizializza `EMISS` | l'eps adattata è **piatta** rispetto a VEGFRA (< 0.001 su tutto l'intervallo) dove quella formula imporrebbe +0.04…0.065. Il caso più pulito è il prato a luglio: 0.9202 adattato, 0.920 `EMISSMIN`, 0.96 se avesse usato la tabella estiva |
+| mix pesato su `LANDUSEF` | porta il gate sul mare da 0.0015 K a 0.98 K. Con `sf_surface_physics=3` WRF non vede mai `LANDUSEF` a runtime |
+| `EMISSMIN + shdfac·(EMISSMAX−EMISSMIN)`, la formula di inizializzazione di WRF | l'eps misurata è **piatta** rispetto a VEGFRA dove quella formula imporrebbe +0.04…0.065. Il prato a luglio misura 0.9200 contro lo 0.96 della tabella estiva |
+| `EMISSMIN` stesso | giusto su dieci categorie, sbagliato sulle quattro sopra |
 
-Quindi `EMISSMIN[IVGTYP]` — quello che il converter già fa — è giusto. Contro il livello di suolo
-a 0 cm su terra senza neve:
+Nota metodologica: `SOILT1` **non** è un riferimento per la pelle — è la temperatura *dentro la
+neve*. Il confronto col suolo si fa con `TSLB[0]`. Una misura intermedia che usava `SOILT1` dava
+7 K di RMSE ed è stata scartata.
 
-| superficie | notte | giorno |
-|---|---|---|
-| foreste, savana, prato, urbano (7 classi) | 0.03–0.11 K RMSE | 0.09–0.22 K |
-| foresta mista, colture | 0.12–0.19 K | 0.21–0.30 K |
-| **arbusteto aperto** | 0.72 K (bias −0.68) | 1.22 K (bias −1.15) |
-| **suolo nudo / rado** | 0.75 K (bias −0.74) | 1.54 K (bias −1.52) |
-
-Sulle due classi aride `skt` corre 1–1.5 K più freddo del suolo. Lì il fit vorrebbe un'emissività
-vicina a **0.85**, che chiuderebbe lo scarto — ma 0.85 sta **sotto ogni emissività di ogni
-tabella WRF** (il minimo assoluto è 0.88, l'urbano), quindi non può essere ciò che il modello ha
-usato, e adottarla significherebbe mettere un numero inventato sotto un nome ERA5. **Non
-"sistemare" questo scarto con un fit.**
-
-Nota per chi rilegge le versioni precedenti: una misura intermedia usava `SOILT1` come
-riferimento e dava 7 K di RMSE con +6 K di bias. Era il campo sbagliato — `SOILT1` è la
-temperatura *dentro la neve*, non la pelle.
+Categorie mai misurate perché assenti o rarissime nel dominio (11 Wetland, 14 CropMosaic,
+19/20 Tundra, 21 Lake): mantengono `EMISSMIN` e sono marcate `NOT MEASURED` nella tabella.
 
 ## 4. Costo misurato
 

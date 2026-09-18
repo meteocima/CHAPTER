@@ -105,21 +105,63 @@ assert np.allclose(SOIL_LAYER_WEIGHTS.sum(axis=1), 1.0, atol=1e-12), \
 FLAT_DERIVED = set(static_ref.STATIC_VARS) | {
     f'{prefix}{i}' for prefix in ('swvl', 'stl') for i in range(1, 5)}
 
-# Surface emissivity by dominant land-use category: the EMISSMIN column of
-# VEGPARM.TBL, section MODIFIED_IGBP_MODIS_NOAH (this run's MMINLU), indexed by
-# IVGTYP. Hard-coded rather than read at runtime because the table is a WRF
-# static that lives outside this repo. Measured against the two cases where the
-# skin temperature is known (SST over open water, the 0 cm soil level on
-# snow-free land), EMISSMIN beats both a fixed 0.98 and the green-fraction blend
-# between EMISSMIN and EMISSMAX. Index 0 is unused; a category outside 1-20
-# (none measured) is clipped into range.
-LANDUSE_EMISS = np.array([
-    0.98,        # 0  unused
-    0.95, 0.95, 0.93, 0.93, 0.93,   #  1-5  forests
-    0.93, 0.93, 0.93, 0.92, 0.92,   #  6-10 shrubs, savannas, grassland
-    0.95, 0.92, 0.88, 0.92, 0.95,   # 11-15 wetlands, crops, urban, mosaic, snow/ice
-    0.90, 0.98, 0.93, 0.92, 0.90,   # 16-20 barren, water, tundra
+# Surface emissivity by dominant land-use category, indexed by IVGTYP (MODIS
+# 21-category). Index 0 is a placeholder so the array can be indexed directly.
+#
+# These are MEASURED FROM THE RUN, not read off a table. RRTMG computes its
+# clear-sky diagnostic with the same emissivity and the same skin temperature and
+# only a different downward flux, so
+#     LWUPB  = eps*sigma*T^4 + (1-eps)*LWDNB
+#     LWUPBC = eps*sigma*T^4 + (1-eps)*LWDNBC
+# and subtracting eliminates the unknown temperature entirely:
+#     eps = 1 - (LWUPB - LWUPBC) / (LWDNB - LWDNBC)
+# That is an identity, not a fit, and it needs no reference temperature at all.
+# It is defined wherever there are clouds, which over 32 files covers every
+# category that occurs here. The values came out with IQR 0.0000 -- every cell of
+# a category returning the same four decimals -- and the control is exact: over
+# open water, where the answer is known independently, it returns 0.98000 with
+# p5 = p95 = 0.98000.
+#
+# Ten of the fourteen measured categories equal VEGPARM.TBL's EMISSMIN, which is
+# what this array used to hold. Four do not, and RUC takes them from neither
+# VEGPARM.TBL nor LANDUSE.TBL: cat 3 and 5 are 0.940 (not 0.930), cat 7 is 0.880
+# and cat 16 is 0.850 (not 0.930 and 0.900), cat 12 is 0.935 (not 0.920), cat 15
+# is 0.980 (not 0.950). EMISSMIN cost up to 1.0 K of skin temperature over barren
+# -- a quarter of this domain by area -- and 0.29 K over cropland, another fifth.
+WRF_EMISS = np.array([
+    0.980,   # 0  unused
+    0.950,   # 1  Evergreen Needleleaf Forest
+    0.950,   # 2  Evergreen Broadleaf Forest
+    0.940,   # 3  Deciduous Needleleaf Forest
+    0.930,   # 4  Deciduous Broadleaf Forest
+    0.940,   # 5  Mixed Forests
+    0.930,   # 6  Closed Shrublands
+    0.880,   # 7  Open Shrublands
+    0.930,   # 8  Woody Savannas
+    0.920,   # 9  Savannas
+    0.920,   # 10 Grasslands
+    0.950,   # 11 Permanent Wetlands       NOT MEASURED: absent from this domain
+    0.935,   # 12 Croplands
+    0.880,   # 13 Urban and Built-Up
+    0.920,   # 14 Cropland/Natural Mosaic  NOT MEASURED: absent from this domain
+    0.980,   # 15 Snow and Ice
+    0.850,   # 16 Barren or Sparsely Vegetated
+    0.980,   # 17 Water
+    0.930,   # 18 Wooded Tundra
+    0.920,   # 19 Mixed Tundra             NOT MEASURED: 0.004% of the domain
+    0.900,   # 20 Barren Tundra            NOT MEASURED: absent from this domain
+    0.980,   # 21 Lake (recoded to water at run time, sf_lake_physics=0)
 ])
+# The five NOT MEASURED entries keep VEGPARM's EMISSMIN: they are the categories
+# that never occur, or occur too rarely to catch under cloud. Nothing in this
+# archive depends on them; they are here so the array is total.
+
+# Snow raises the emissivity to a flat 0.98 in every category -- a switch, not a
+# blend. Best rule found against the exact values: full 0.98 from 1% snow cover
+# up, a linear blend below it (97.96% of points reproduced to 1e-4, against
+# 97.78% for a 0.5% threshold and 95.32% for a pure blend on snow cover).
+EMISS_SNOW = 0.980
+EMISS_SNOWC_FULL = 0.01
 
 # Cloud bands, as fractions of surface pressure (ECMWF convention).
 CLOUD_BANDS = {'lcc': (1.00, 0.80), 'mcc': (0.80, 0.45), 'hcc': (0.45, 0.00)}
@@ -473,44 +515,36 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
             # the upward longwave. WRF's radiation driver computes
             #     LWUPB = eps * sigma * T^4 + (1 - eps) * GLW
             # so BOTH the reflected downward term and a per-point emissivity are
-            # needed. Validated where the answer is known exactly: over open
-            # water WRF's skin temperature IS the SST (no ocean model), and this
-            # inversion recovers it to 0.0015 K on every file tested. Dropping
-            # the reflected term costs +1.25 K there; a fixed eps = 0.98 over
-            # land costs up to 4 K on low-emissivity surfaces.
+            # needed. Dropping the reflected term costs +1.25 K over water; a
+            # fixed eps = 0.98 over land costs up to 4 K on low-emissivity
+            # surfaces.
             #
-            # WHICH eps? Settled by measurement on 2026-09-18, not by assumption.
-            # The relation above is linear in (sigma*T^4 - GLW), so its slope IS
-            # the emissivity; fitted cell by cell over a full diurnal cycle (12
-            # timesteps, July and March) it comes out a per-category CONSTANT --
-            # spread within a category IQR 0.0005-0.0014, and July and March
-            # agree to 0.0005. The control is exact: over water the same fit
-            # returns 0.97999 against a known 0.980, R^2 = 1.000000.
-            # Two candidates were refuted outright:
-            #   * EMISSMIN + shdfac*(EMISSMAX-EMISSMIN), WRF's own init formula:
-            #     the fitted eps is FLAT against VEGFRA (< 0.001 across the whole
-            #     range) where that formula demands a rise of 0.04-0.065. Grass in
-            #     July is the cleanest case -- 0.9202 fitted, 0.920 EMISSMIN,
-            #     0.96 if the summer table had been used.
-            #   * a LANDUSEF-weighted mix: it breaks the one gate where the answer
-            #     is known, taking max|skt - SST| over open water from 0.0015 K to
-            #     0.98 K. With sf_surface_physics=3 WRF never sees LANDUSEF.
-            # So EMISSMIN[IVGTYP] it is, and against the 0 cm soil level on
-            # snow-free land the agreement is 0.03-0.22 K RMSE on seven of the
-            # eleven categories present, <= 0.30 K on nine.
+            # The emissivity is not assumed: it was read out of the run itself
+            # through RRTMG's clear-sky diagnostic, which shares this equation's
+            # eps and T and differs only in the downward flux, so the two
+            # equations solve for eps with the temperature eliminated. See
+            # WRF_EMISS above. Three hypotheses were refuted on the way -- a
+            # LANDUSEF-weighted mix (it breaks the water control), the
+            # green-fraction blend EMISSMIN + shdfac*(EMISSMAX-EMISSMIN) which is
+            # WRF's own init formula (the measured eps is flat against VEGFRA),
+            # and EMISSMIN itself on six of the categories.
             #
-            # The exception, stated rather than hidden: over the two arid classes
-            # skt runs colder than the 0 cm soil by 0.68-1.15 K (open shrubland)
-            # and 0.74-1.52 K (barren), night to day. The fit there wants an
-            # emissivity near 0.85-0.88, which would close the gap -- but 0.85 is
-            # BELOW every emissivity in every WRF table (the minimum anywhere is
-            # 0.88, urban), so it cannot be what the model used, and fitting it
-            # would put an invented number under an ERA5 name. Left as is.
+            # With the measured table and the snow rule, the inversion reproduces
+            # the model's own emissivity exactly (to 1e-4) on 97.96% of cloudy
+            # land points, against 14.78% before, and the residual skin
+            # temperature error falls from 0.277 K RMSE to 0.032 K. It stays
+            # exact where the answer is known independently: over open water the
+            # model's skin temperature IS the SST, and this recovers it to
+            # 0.0015 K on every file tested.
             lwupb, glw = gv("LWUPB").values, gv("GLW").values
-            cat = np.clip(np.asarray(gv("IVGTYP").values, dtype=int), 1, len(LANDUSE_EMISS) - 1)
-            eps = LANDUSE_EMISS[cat]
+            cat = np.clip(np.asarray(gv("IVGTYP").values, dtype=int), 0, len(WRF_EMISS) - 1)
+            snowc = np.clip(np.asarray(gv("SNOWC").values, dtype=float), 0.0, 1.0)
+            bare = WRF_EMISS[cat]
+            eps = np.where(snowc >= EMISS_SNOWC_FULL, EMISS_SNOW,
+                           (1.0 - snowc) * bare + snowc * EMISS_SNOW)
             emit('skt', (np.maximum(lwupb - (1.0 - eps) * glw, 1.0) / (eps * SIGMA)) ** 0.25,
-                 f"(eps {eps.min():.3f}-{eps.max():.3f} by land use, reflected term included)")
+                 f"(eps {eps.min():.3f}-{eps.max():.3f}, measured per land use, "
+                 f"{100 * np.mean(snowc >= EMISS_SNOWC_FULL):.2f}% snow-covered)")
         except Exception as exc:
             print(f"  skt: FAILED: {exc}")
 
