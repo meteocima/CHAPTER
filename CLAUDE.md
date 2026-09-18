@@ -74,6 +74,16 @@ appears in `hpc/ledger.TOKEN_KINDS`. **Adding a `log_status` token to the driver
 teaching the reporter fails it** -- that is the point, since a token the reporter does not
 know used to be dropped from `report=true` in silence.
 
+**Why pytest sits in the shared venv.** `uv` installs the default dependency groups on every
+`uv sync`/`uv run`, and its default is `["dev"]` -- no `[tool.uv] default-groups` is set here.
+So pytest (~3.3 MB) lives in the same `.venv` every compute node reads. Deliberate: excluding
+`dev` from the defaults would make each test run `uv run --group dev pytest`, and a test that
+needs an extra flag is a test nobody runs -- which would cost more than the megabytes, since
+the drift test above is the only thing keeping that defect from coming back. The one case
+where it bites is rebuilding the venv from scratch with no network: `uv` would then want
+pytest from PyPI. The lock is committed and `uv sync --frozen` reports no changes, so that is
+not the normal path.
+
 Changes to anything else are verified by hand, in this order:
 
 1. `--debug-vars` on a real wrfout for the field you touched. A run that asks only for plain 2D
