@@ -4,6 +4,8 @@ it, which are about the chain itself, and which the reporter does not know."""
 import os
 import re
 
+import pytest
+
 from hpc import ledger
 
 
@@ -129,14 +131,28 @@ EXPECTED_KINDS = {
 }
 
 
-def test_every_token_lands_in_its_kind():
-    assert ledger.TOKEN_KINDS == EXPECTED_KINDS
+def observed_kind(token):
+    """The kind a token has as far as anyone reading a report can tell."""
+    key = "DRIVER@login02" if token in CHAIN_KEYED else "2025-06-30T20"
+    # A problem is pre-loaded so that a clear token has something to clear: that
+    # is the only way "clear" is observable from outside.
+    result = ledger.classify([
+        line(key, "MISSING_ON_LRZ", "pre-existing"),
+        line(key, token, "detail"),
+    ])
+    if result.unknown:
+        return "unknown"
+    if result.chain_events:
+        return ledger.CHAIN
+    return ledger.PROBLEM if key in result.problems else ledger.CLEAR
 
 
-def test_no_token_the_driver_writes_is_unknown():
-    lines = [line("2025-06-30T20", token) for token in EXPECTED_KINDS]
+CHAIN_KEYED = {t for t, kind in EXPECTED_KINDS.items() if kind == ledger.CHAIN}
 
-    assert ledger.classify(lines).unknown == {}
+
+@pytest.mark.parametrize("token,kind", sorted(EXPECTED_KINDS.items()))
+def test_every_token_lands_in_its_kind(token, kind):
+    assert observed_kind(token) == kind
 
 
 # --- drift ------------------------------------------------------------------
@@ -150,9 +166,31 @@ DRIVER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
                       "hpc", "fetch_step.sh")
 
 
+TOKEN_LITERAL = r'"([A-Z][A-Z0-9_]{2,})"'
+
+
 def tokens_written_by_the_driver():
+    """Every ledger token fetch_step.sh can write, read back out of the script.
+
+    Two shapes, because the driver has two: the token is usually a literal
+    argument of log_status, but already_done() prints the skip tag for its caller
+    to pass on, so `echo "SKIP_..."` is a writer too.
+    """
+    found = set()
     with open(DRIVER) as fh:
-        return set(re.findall(r'"([A-Z][A-Z0-9_]{2,})"', fh.read()))
+        for ln in fh:
+            if "log_status" in ln:
+                found |= set(re.findall(TOKEN_LITERAL, ln))
+            printed = re.search(r"\becho\s+" + TOKEN_LITERAL, ln)
+            if printed:
+                found.add(printed.group(1))
+    return found
+
+
+def test_the_driver_tokens_can_still_be_read_out_of_the_driver():
+    """Guards the three tests below: a subset assertion passes trivially against
+    an empty set, so a regex that quietly stops matching would look like health."""
+    assert len(tokens_written_by_the_driver()) == 13
 
 
 def test_the_driver_writes_no_token_this_module_has_not_been_taught():

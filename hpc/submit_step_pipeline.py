@@ -94,11 +94,11 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
     if direction == "backward":
         hours.reverse()
 
+    lines = []
     if os.path.exists(status_log):
         with open(status_log) as f:
-            summary = ledger.classify(f)
-    else:
-        summary = ledger.classify([])
+            lines = f.readlines()
+    summary = ledger.classify(lines)
     problems = summary.problems
 
     def produced(dt):
@@ -146,11 +146,11 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
         # stopped early -- so the pending rows above may never have been attempted.
         print("\n# chain events")
         for key, tag, detail in summary.chain_events:
-            print(f"   {key:16}  {tag:22}  {detail[:60]}")
+            # Not truncated: these are few, and the actionable half of the
+            # driver's message ("re-launch the window, it is re-entrant") is at
+            # the end of it.
+            print(f"   {key:16}  {tag:22}  {detail}")
     print(f"\n# summary: {done} done, {missing} pending, {recall} need recall/attention")
-    if summary.chain_events:
-        print(f"# {len(summary.chain_events)} chain event(s): a chain died or never started; "
-              "the pending rows above may not have been attempted")
     if summary.unknown:
         counted = ", ".join(f"{tag} ({n}x)" for tag, n in sorted(summary.unknown.items()))
         print(f"# WARNING: {sum(summary.unknown.values())} ledger entries carry a token this "

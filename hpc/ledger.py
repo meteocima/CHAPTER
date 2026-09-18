@@ -37,16 +37,18 @@ TOKEN_KINDS = {
     'RESPAWN_FAILED': CHAIN,
     'DATAMOVER_UNREACHABLE': CHAIN,
 
-    # historical: no current code writes these, but they sit in live ledgers and
-    # a report over an old campaign must still read them
+    # historical: no current driver writes these, but they sit in live ledgers.
+    # TAPE_TIMEOUT and UNREADABLE_TAPE were renamed (cae74a3, c67b7f9);
+    # CONVERT_RESUBMITTED never existed in a committed driver at all, so the
+    # share2024 chain ran a locally edited one -- which the snapshot mechanism
+    # allows and this table has to survive
     'TAPE_TIMEOUT': PROBLEM,
     'UNREADABLE_TAPE': PROBLEM,
     'CONVERT_RESUBMITTED': CLEAR,
 }
 
-# Of the above, the ones no current driver writes. Kept so that a report over an
-# old campaign still reads, and named so that the drift test can tell "the driver
-# gained a token" from "the driver lost one".
+# Of the above, the ones no current driver writes. Named so that the drift test
+# can tell "the driver gained a token" from "the driver lost one".
 HISTORICAL = frozenset({'TAPE_TIMEOUT', 'UNREADABLE_TAPE', 'CONVERT_RESUBMITTED'})
 
 Summary = collections.namedtuple('Summary', 'problems chain_events unknown')
