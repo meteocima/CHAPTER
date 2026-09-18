@@ -139,11 +139,11 @@ def _rewrite_to(path, tmp, ref_m):
     return stats
 
 
-def fix_day(day, files, ref_dir, ledger, dry_run):
+def fix_day(day, files, accum_ref_dir, ledger, dry_run):
     """files: {hour: path}. Returns a Counter-like dict of outcomes."""
     out = defaultdict(int)
     date = datetime.strptime(day, '%Y%m%d')
-    sidecar = accum_ref.ref_path(ref_dir, date)
+    sidecar = accum_ref.ref_path(accum_ref_dir, date)
 
     # Current state of every file (tp values are only kept for 00Z)
     marks = {}
@@ -246,7 +246,10 @@ def running_converts():
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--grib-dir', default=f'{WORK_DIR}/grib')
-    ap.add_argument('--ref-dir', default=f'{WORK_DIR}/accum_ref')
+    ap.add_argument('--accum-ref-dir', default=f'{WORK_DIR}/accum_ref',
+                    help='00Z accumulation sidecars. Defaults to the v1 tree ON PURPOSE: '
+                         'this script repairs GRIBs under grib/, which were produced against '
+                         'it. Everything current uses accum_ref_v2.')
     ap.add_argument('--ledger', default=f'{WORK_DIR}/logs/fix_tp_accum_status.log')
     ap.add_argument('--month', action='append', default=[], help='YYYY-MM (repeatable)')
     ap.add_argument('--date', action='append', default=[], help='YYYY-MM-DD (repeatable)')
@@ -286,7 +289,7 @@ def main():
         os.makedirs(os.path.dirname(ledger), exist_ok=True)
     total = defaultdict(int)
     for day in sorted(days):
-        res = fix_day(day, days[day], args.ref_dir, ledger, args.dry_run)
+        res = fix_day(day, days[day], args.accum_ref_dir, ledger, args.dry_run)
         for k, v in res.items():
             total[k] += v
     print(f"\nSUMMARY {sorted(months)} days={len(days)} files={sum(len(f) for f in days.values())} "

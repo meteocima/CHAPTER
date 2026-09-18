@@ -16,7 +16,7 @@ depend on the 00Z wrfout still being on disk. Invariant kept by the pipeline:
 the 00Z wrfout is never deleted unless its sidecar exists.
 
 CLI (used by hpc/fetch_step.sh on the login node):
-    python accum_ref.py extract <wrfout_00Z> <ref_dir>
+    python accum_ref.py extract <wrfout_00Z> <accum_ref_dir>
 """
 
 import os
@@ -52,11 +52,11 @@ ACCUMULATED_VARS = [
 ACCUM_FROM_00Z_GENPROC = 128
 
 
-def ref_path(ref_dir, target_date):
+def ref_path(accum_ref_dir, target_date):
     """Sidecar path for a target date (datetime/date or 'YYYY-MM-DD')."""
     if isinstance(target_date, str):
         target_date = datetime.strptime(target_date, '%Y-%m-%d')
-    return os.path.join(ref_dir, f"{target_date:%Y}", f"{target_date:%m}",
+    return os.path.join(accum_ref_dir, f"{target_date:%Y}", f"{target_date:%m}",
                         f"accum_ref_{target_date:%Y%m%d}.npz")
 
 
@@ -112,15 +112,15 @@ def wrfout_00z_path(input_file, target_date):
                         f"wrfout_d02_{target_date:%Y-%m-%d}_00:00:00")
 
 
-def get_reference(input_file, target_date, var_names, sim_start, ref_dir=None):
+def get_reference(input_file, target_date, var_names, sim_start, accum_ref_dir=None):
     """Return the 00Z fields {var: array} for target_date, native WRF units.
 
     Lookup: sidecar -> 00Z wrfout next to input_file (materialised as sidecar when
-    ref_dir is set) -> sidecar again (the 00Z convert may have written it and deleted
+    accum_ref_dir is set) -> sidecar again (the 00Z convert may have written it and deleted
     the wrfout between our two checks) -> FileNotFoundError.
     sim_start: SIMULATION_START_DATE of the input, checked against the reference.
     """
-    sidecar = ref_path(ref_dir, target_date) if ref_dir else None
+    sidecar = ref_path(accum_ref_dir, target_date) if accum_ref_dir else None
     w00 = wrfout_00z_path(input_file, target_date)
 
     def from_sidecar():
@@ -147,7 +147,7 @@ def get_reference(input_file, target_date, var_names, sim_start, ref_dir=None):
             f"  looked for wrfout : {w00}\n"
             f"  Accumulations must be referred to 00Z of the same day; refusing to write "
             f"run-init-referred values. Fetch the 00Z wrfout (or create the sidecar with "
-            f"'python accum_ref.py extract <wrfout_00Z> <ref_dir>') and re-run.")
+            f"'python accum_ref.py extract <wrfout_00Z> <accum_ref_dir>') and re-run.")
 
     fields, meta, src = found
     missing = [v for v in var_names if v not in fields]
@@ -164,13 +164,13 @@ def _cli(argv):
     if len(argv) != 3 or argv[0] != 'extract':
         print(__doc__)
         return 2
-    wrfout, ref_dir = argv[1], argv[2]
+    wrfout, accum_ref_dir = argv[1], argv[2]
     fields, meta = extract_from_wrfout(wrfout)
     valid = datetime.strptime(meta['valid_time'], '%Y-%m-%d_%H:%M:%S')
     if valid.hour != 0:
         print(f"ERROR: {wrfout} is {meta['valid_time']}, not a 00Z file", file=sys.stderr)
         return 1
-    path = ref_path(ref_dir, valid)
+    path = ref_path(accum_ref_dir, valid)
     if os.path.isfile(path):
         print(f"exists: {path}")
         return 0

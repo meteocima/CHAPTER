@@ -400,7 +400,7 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
             accum_00z, src = accum_ref.get_reference(
                 input_file, valid, needed,
                 sim_start=getattr(ncfile, 'SIMULATION_START_DATE', None),
-                ref_dir=accum_ref_dir)
+                accum_ref_dir=accum_ref_dir)
             print(f"  {needed} referred to 00Z from {src}")
 
     def since_00z(name):
