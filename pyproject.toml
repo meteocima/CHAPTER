@@ -10,7 +10,7 @@ authors = [
 maintainers = [
     { name = "Luca Monaco", email = "luca.monaco@cimafoundation.org" },
 ]
-description = "CHAPTER reanalysis conversion pipeline: WRF to ECMWF GRIB1 and Anemoi ZARR formats"
+description = "CHAPTER reanalysis conversion pipeline: WRF to ECMWF GRIB2 and Anemoi ZARR formats"
 requires-python = ">=3.10"
 keywords = [
     "python", "wrf-python", "wrf", "forecast", "model",
@@ -59,6 +59,14 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/meteocima/CHAPTER"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.setuptools]
 package-data = { "wrf" = ["data/psadilookup.dat"]}

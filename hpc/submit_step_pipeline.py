@@ -30,6 +30,8 @@ from omegaconf import DictConfig, OmegaConf
 # Add project root to path for consistency with submit_pipeline.py
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from hpc import ledger  # noqa: E402  (needs the path insert above)
+
 
 def parse_sbatch_jobid(output: str) -> str:
     """Extract job ID from sbatch output like 'Submitted batch job 12345'."""
@@ -69,12 +71,6 @@ def grib_name(template: str, dt: datetime) -> str:
 # truncated transfer. Mirrors MIN_WRFOUT_BYTES in hpc/fetch_step.sh.
 MIN_WRFOUT_BYTES = 1073741824  # 1 GiB
 
-# Status-log tags that mean the timestep needs attention (usually just a re-run;
-# a true tape recall only if it persists). Old tape-named tags kept for historical
-# ledger entries written before the rename.
-PROBLEM_TAGS = {"MISSING_ON_LRZ", "FETCH_TIMEOUT", "UNREADABLE", "FETCH_ERROR",
-                "TAPE_TIMEOUT", "UNREADABLE_TAPE", "SKIP_OFFLINE", "REF_UNAVAILABLE"}
-CLEAR_TAGS = {"FETCH_OK", "CONVERT_SUBMITTED", "SKIP_GRIB_EXISTS", "SKIP_RAW_EXISTS"}
 
 
 def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
@@ -98,20 +94,12 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
     if direction == "backward":
         hours.reverse()
 
-    # Last-wins parse of the ledger: a later success clears an earlier problem.
-    problems = {}
     if os.path.exists(status_log):
         with open(status_log) as f:
-            for line in f:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) < 3:
-                    continue
-                dtv, status = parts[1], parts[2]
-                detail = parts[3] if len(parts) > 3 else ""
-                if status in PROBLEM_TAGS:
-                    problems[dtv] = (status, detail)
-                elif status in CLEAR_TAGS:
-                    problems.pop(dtv, None)
+            summary = ledger.classify(f)
+    else:
+        summary = ledger.classify([])
+    problems = summary.problems
 
     def produced(dt):
         """(exists, path) for the artefact this mode is supposed to produce."""
@@ -153,7 +141,20 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
             detail = "(no problem logged; fetch pending or not attempted)"
             missing += 1
         print(f"   {dts:16}  {state:18}  {detail[:80]}")
+    if summary.chain_events:
+        # Not timesteps: these are about the driver itself, and they mean the chain
+        # stopped early -- so the pending rows above may never have been attempted.
+        print("\n# chain events")
+        for key, tag, detail in summary.chain_events:
+            print(f"   {key:16}  {tag:22}  {detail[:60]}")
     print(f"\n# summary: {done} done, {missing} pending, {recall} need recall/attention")
+    if summary.chain_events:
+        print(f"# {len(summary.chain_events)} chain event(s): a chain died or never started; "
+              "the pending rows above may not have been attempted")
+    if summary.unknown:
+        counted = ", ".join(f"{tag} ({n}x)" for tag, n in sorted(summary.unknown.items()))
+        print(f"# WARNING: {sum(summary.unknown.values())} ledger entries carry a token this "
+              f"report does not know: {counted}")
     if recall_list:
         print("# timesteps to recall on LRZ:\n " + " ".join(recall_list))
 

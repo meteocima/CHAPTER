@@ -63,8 +63,18 @@ supermuc-get <remote_path> <local_path>    # rsync download via SSH socket
 
 ## Testing
 
-There is no `test/` directory in this repo (the test commands of upstream wrf-python do not apply).
-No CI/CD pipeline, no linter configuration. Changes are verified by hand, in this order:
+There is **one** automated test file, `tests/test_ledger.py`, covering the ledger token
+classification in `hpc/ledger.py` -- pure string logic, the one part of this codebase a test
+can settle. Run it with `uv run pytest` (pytest is in the `dev` dependency group). Everything
+else, including the whole conversion, is verified by hand; the upstream wrf-python test
+commands do not apply. No CI/CD pipeline, no linter configuration.
+
+One of those tests reads `hpc/fetch_step.sh` and asserts that every ledger token it writes
+appears in `hpc/ledger.TOKEN_KINDS`. **Adding a `log_status` token to the driver without
+teaching the reporter fails it** -- that is the point, since a token the reporter does not
+know used to be dropped from `report=true` in silence.
+
+Changes to anything else are verified by hand, in this order:
 
 1. `--debug-vars` on a real wrfout for the field you touched. A run that asks only for plain 2D
    native fields skips the shared 3D cache and takes ~15 s; anything else reads 2.6 GB first.
