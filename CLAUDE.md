@@ -166,3 +166,17 @@ Per day: orchestrator submits fetch job (lrd_all_serial, rsync 24 wrfout) -> con
 - **`10fg` is the one non-00Z accumulation.** `WSPD10MAX` is reset by WRF at every history write (verified: it is not monotonic across consecutive hours), so it is a 1-hour maximum and is encoded with reference time H-1 and step `0-1`, `stepType=max`. It is the max of the *resolved* 10 m wind, not a gust parameterisation
 - **00Z reference sidecar** (`accum_ref.py`): `<work_dir>/accum_ref_v2/YYYY/MM/accum_ref_YYYYMMDD.npz`, native WRF units. **Adding a name to `ACCUMULATED_VARS` makes every existing sidecar incomplete** (`load_ref` raises `KeyError`), so those days must be re-extracted from their 00Z wrfout. The 246-message schema needs **19** accumulators (precipitation, runoff and the full radiation set, all verified monotone within a run), against the 12 of the previous schema and the 6 the sidecars on disk actually carry — which is why the tree is `accum_ref_v2` and the old `accum_ref` is left alone for `grib/` and `fix_tp_accum.py`. Beware that `ensure_ref` trusts any non-empty sidecar it finds without checking its contents. Sidecar contents: written atomically by the converter for 00Z input, by `fetch_step.sh` `ensure_ref` (which fetches the 00Z first when needed — in backward order it would arrive last) and by `fix_tp_accum.py` (from the old 00Z GRIB). Invariant: the 00Z wrfout is never deleted without its sidecar. A convert with no reference fails loudly (no GRIB) rather than writing run-init-referred tp
 - Derived variables: specific humidity from mixing ratio, TCW, skin temperature, slope of orography
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues in `meteocima/CHAPTER`, via the `gh` CLI (installed in `~/.local/bin`, authenticated as `MonacoL`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, each label string equal to its name; all five exist in the repo. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root, both created lazily by `/domain-modeling`. See `docs/agents/domain.md`.
