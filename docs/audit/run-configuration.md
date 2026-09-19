@@ -1006,3 +1006,34 @@ a PBL height and the Registry did not write it.
 **Stated as unproven**: the Registry is not on disk and no one was asked. This is the best
 reading of the files, taken because the alternative changes nothing actionable — under either
 mechanism the untrimmed output is gone.
+
+## Addendum, 2026-09-19: the two domains run together, two-way
+
+Worth recording because it was believed otherwise, and because it changes how one of the
+archive's facts should be read.
+
+`max_dom = 2`, `feedback = 1`, and the delivered wrfout says it of itself:
+
+```
+GRID_ID = 2      PARENT_ID = 1      PARENT_GRID_RATIO = 3
+I_PARENT_START = 88    J_PARENT_START = 91    FEEDBACK = 1
+DX = 3000.0      WEST-EAST_GRID_DIMENSION = 1642   SOUTH-NORTH_GRID_DIMENSION = 1354
+```
+
+So it is **one WRF execution with both domains nested and coupled two ways**, not a coarse run
+performed first and then used as offline forcing. The chain is ERA5 -> `wrfbdy_d01` -> d01
+(9 km, 718x636, `cu_physics = 6` Tiedtke) and d02 (3 km, 1641x1353 mass points,
+`cu_physics = 0`) advancing together, with d02 feeding back onto d01.
+
+Three consequences:
+
+1. **The "second column is d02" rule is now verified, not assumed.** `GRID_ID = 2` with
+   `I_PARENT_START = 88` matches the second column of `namelist.input` exactly, and
+   `1642 x 1354` staggered are the archive's `1641 x 1353`.
+2. **There is no separate coarse run to go looking in.** And with `feedback = 1`, d01 would
+   not be an independent reference even if its output survived: d02 is inside it.
+3. **`RAINC` being dead on d02 is the configuration working, not a gap.** At 3 km convection is
+   resolved explicitly by WSM6, which is why the cumulus scheme is off on the nest; the
+   parameterised convection lives on d01 and reaches d02 through the coupling.
+   `CLAUDE.md` states the fact ("`RAINC` is dead because `CU_PHYSICS=0`") in a way that reads
+   as a deficiency. `tp = RAINNC` is complete, and complete for the right reason.
