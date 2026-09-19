@@ -27,9 +27,11 @@ TITLE = ' OUTPUT FROM WRF V4.1.1 MODEL'
 
 and WPS 4.1, from `opt_geogrid_tbl_path = '.../WPS-4.1//geogrid/'` in `namelist.wps`.
 
-The namelist is one run's (initialised `2022-12-31_18:00:00`), and the archive spans many
-runs. It is treated here as representative because the hourly output is structurally
-identical across the years already converted; a per-year check is not part of this ticket.
+The namelist read here is one run's (initialised `2022-12-31_18:00:00`), and the archive spans
+many runs. **The user confirmed on 2026-09-19 that the namelist does not vary in time**, so
+everything below holds for the whole archive and not only for this run. It was already
+consistent with the hourly output being structurally identical across the years converted so
+far; that is now a statement from the run's own side rather than an inference from ours.
 
 ---
 
@@ -934,8 +936,8 @@ of a profile whose deep structure is interpolated from 4 input layers.
   does not matter
 - The exact snow-emissivity switch in RUC — only the value it switches to (0.980,
   `MODI-RUC` cat 15) is confirmed here
-- Whether this one namelist governs every year of the archive. It is one run's
-  (`2022-12-31_18:00:00`); a per-year check was not part of this ticket
+- ~~Whether this one namelist governs every year of the archive~~ — **answered**: the user
+  confirmed on 2026-09-19 that the namelist does not vary in time
 
 **New, and the highest-value items**
 
@@ -955,3 +957,21 @@ of a profile whose deep structure is interpolated from 4 input layers.
   interpolation.
 - **`PREC_ACC_NC` is the exact hourly `RAINNC` increment** (verified to 1.1e-4 mm over the
   whole domain): a per-file cross-check on `tp` that bypasses the 00Z sidecar entirely.
+
+---
+
+## Addendum, 2026-09-19: `auxhist23` does not survive
+
+Section 6 flags `p_lev_diags = 1` as the highest-value thing to ask the run's producers for:
+the run computed its own pressure-level diagnostics, hourly, on 11 levels of which 8 are ours,
+into an `auxhist23` stream we never receive. **The user confirmed that the stream is deleted
+after every run.** It exists nowhere.
+
+That closes the one route to checking our vertical interpolation against the model that
+produced the data, on the same grid, with no resolution gap. The pressure-level family has to
+rest on ERA5 at ~31 km and on internal consistency instead — which is a weaker instrument, and
+the family's verdict should say so rather than imply the check was as strong as it could have
+been.
+
+The other half of that ask — why the history stream is trimmed, and whether `TSK` survives
+upstream — is still open and still worth making.
