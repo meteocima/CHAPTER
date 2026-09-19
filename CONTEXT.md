@@ -87,6 +87,18 @@ _Avoid_: using static for a field that is merely expected to be non-zero.
 A field that is identically zero on every sampled timestep. A dead field is not published,
 whatever the physical reason for its being zero.
 
+**Published**:
+Written into the archive as a variable. The bar is that the WRF quantity **is** the ERA5
+one, or that the difference states in one line; a field can be alive, useful and still
+unpublished because nothing in ERA5 fits it.
+_Avoid_: exported, included
+
+**Unpublished**:
+Present in the wrfout and deliberately left out, as distinct from a field that cannot be
+produced at all. The first is a decision and is recorded in `CHAPTER_VARIABLES.md`; the
+second is a limit of the run and is recorded in `MISSING_VARIABLES.md`.
+_Avoid_: missing, excluded — both blur the two.
+
 ### Orchestration
 
 **Campaign**:
