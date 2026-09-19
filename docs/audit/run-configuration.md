@@ -975,3 +975,34 @@ been.
 
 The other half of that ask — why the history stream is trimmed, and whether `TSK` survives
 upstream — is still open and still worth making.
+
+## Addendum, 2026-09-19: the history stream was trimmed in the Registry
+
+Section 6 leaves open why `TSK`, `HFX`, `LH`, `QFX`, `GRDFLX`, `EMISS`, `ALBEDO`, `PBLH` and
+`LANDUSEF` are absent from the delivered wrfout when `isfflx = 1` and `IOFIELDS_FILENAME` is
+unset. Closed on 2026-09-19 as **a modified Registry: computed, never written**. Four pieces
+of evidence, none decisive alone, none pointing the other way:
+
+1. **No post-processing trace.** 133 global attributes, all WRF's own; **no `history`, no
+   `NCO`**. `ncks` writes a `history` attribute unless told not to. Format is
+   `NETCDF3_64BIT_OFFSET`, what WRF writes natively.
+2. **The kept/dropped pattern is not a size cut.** `ACHFX`, `ACLHF` and `ACGRDFLX` are present
+   and identically zero (Noah accumulators in a RUC run); their live instantaneous
+   counterparts `HFX`, `LH`, `GRDFLX` are absent. A size cut does not keep dead fields and
+   drop useful ones.
+3. **There was nothing to save.** One 2D field at 1641x1353 float32 is 8.9 MB. All nine,
+   counting `LANDUSEF`'s 21 layers, come to 258 MB of 9140 — **2.8%**, or 0.8% without
+   `LANDUSEF`.
+4. **`wrfinput_d02` still carries `TSK` and `LANDUSEF`** while the wrfout does not: the
+   signature of a Registry with the history flag dropped and the input flag kept. The other
+   seven are absent from `wrfinput_d02` too, correctly — they are diagnostics, not inputs.
+
+**Consequences.** Those nine fields are unrecoverable by any route. The `skt` inversion stays
+a reconstruction and will never be checked against the model's own `TSK`; that is the ceiling
+on what family 8 can claim. `PBLH` stays out of the archive, but `MISSING_VARIABLES.md`
+attributes it to YSU being non-local, which the configuration does not support — YSU diagnoses
+a PBL height and the Registry did not write it.
+
+**Stated as unproven**: the Registry is not on disk and no one was asked. This is the best
+reading of the files, taken because the alternative changes nothing actionable — under either
+mechanism the untrimmed output is gone.
