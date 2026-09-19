@@ -37,7 +37,9 @@
 #
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Honour an inherited value: the snapshot re-exec below runs the script from the
+# log directory, where deriving the repo root from BASH_SOURCE would be wrong.
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "${PROJECT_DIR}"
 
 # ---- the sample ------------------------------------------------------------
@@ -265,19 +267,18 @@ submit_convert() {
 }
 
 phase_verify() {
-    echo "=== verify: check_grib_sanity on every GRIB produced ==="
-    source tools/eccodes_env.sh
-    local d h axis f ok=0 bad=0
+    echo "=== verify: check_grib_sanity over the whole sample in one pass ==="
+    # One invocation for all of them: the eccodes import dominates a single-file
+    # run, and the checker already reports per file and exits 1 if any is BAD.
+    local d h axis f files=() missing=0
     while read -r d h axis; do
         f="$(grib_file "$d" "$h")"
-        if [ ! -f "$f" ]; then echo "  MISSING  ${d}T${h}"; bad=$((bad+1)); continue; fi
-        if ~/.local/bin/uv run python hpc/check_grib_sanity.py "$f" >/dev/null 2>&1; then
-            echo "  OK       ${d}T${h}  $(stat -c%s "$f")B"; ok=$((ok+1))
-        else
-            echo "  FAILED   ${d}T${h}"; bad=$((bad+1))
-        fi
+        if [ -f "$f" ]; then files+=("$f"); else echo "  MISSING  ${d}T${h}"; missing=$((missing+1)); fi
     done < <(each_sample)
-    echo "sane ${ok}, not sane ${bad}"
+    echo "present ${#files[@]}, missing ${missing}"
+    [ "${#files[@]}" -eq 0 ] && return 1
+    source tools/eccodes_env.sh
+    ~/.local/bin/uv run python hpc/check_grib_sanity.py "${files[@]}"
 }
 
 phase_report() {
@@ -291,6 +292,24 @@ phase_report() {
         printf '%-12s %-4s %-12s %-10s %-10s\n' "$d" "$h" "$axis" "$w" "$g"
     done < <(each_sample)
 }
+
+# ---- run from a snapshot ---------------------------------------------------
+# Bash reads a script incrementally from disk: editing this file while a long
+# phase is running shifts every byte after the read offset and the running shell
+# dies on a syntax error mid-loop. That is not hypothetical -- it happened to this
+# script on its first fetch, and to hpc/fetch_step.sh before it (which is why the
+# step pipeline snapshots its driver). So the long phases re-exec themselves from
+# a copy, and the working tree is free to move under them.
+if [ -z "${AUDIT_SNAPSHOT:-}" ]; then
+    case "${1:-report}" in
+        fetch|all|convert)
+            SNAP="${LOG_DIR}/.audit_stage_$(date -u +%Y%m%dT%H%M%S)_$$.sh"
+            cp "${BASH_SOURCE[0]}" "${SNAP}"
+            echo "Running from snapshot ${SNAP} (the working copy is free to be edited)."
+            AUDIT_SNAPSHOT="${SNAP}" PROJECT_DIR="${PROJECT_DIR}" exec bash "${SNAP}" "$@"
+            ;;
+    esac
+fi
 
 case "${1:-report}" in
     link)    phase_link ;;
