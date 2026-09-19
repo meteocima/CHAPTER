@@ -997,7 +997,14 @@ of evidence, none decisive alone, none pointing the other way:
    signature of a Registry with the history flag dropped and the input flag kept. The other
    seven are absent from `wrfinput_d02` too, correctly — they are diagnostics, not inputs.
 
-**Consequences.** Those nine fields are unrecoverable by any route. The `skt` inversion stays
+**Consequences.** Seven of those fields — `TSK`, `HFX`, `LH`, `QFX`, `GRDFLX`, `EMISS`,
+`PBLH` — are unrecoverable by any route: they are dynamic, computed each timestep, and nothing
+else holds them. **`LANDUSEF` is not among them**: `geo_em.d02` carries it in full and
+`static_ref.py` already reads it, which is where `cvl`/`cvh` come from. `ALBEDO` sits between
+the two — the model's own albedo is gone, but geo_em has `ALBEDO12M`, a monthly MODIS
+climatology, which is a different quantity and one the run did not use (`usemonalb = .false.`).
+Absent from the wrfout is not the same as absent from CHAPTER, and geo_em is a second
+inventory of 57 variables that has only ever been mined for seven. The `skt` inversion stays
 a reconstruction and will never be checked against the model's own `TSK`; that is the ceiling
 on what family 8 can claim. `PBLH` stays out of the archive, but `MISSING_VARIABLES.md`
 attributes it to YSU being non-local, which the configuration does not support — YSU diagnoses
