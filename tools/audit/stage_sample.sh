@@ -202,22 +202,41 @@ phase_fetch() {
         echo "FATAL: datamover unreachable from $(hostname). Run this on a regular login node."
         exit 1
     fi
-    local d h axis running=0 n=0
+    # Collect the pending timesteps FIRST, then walk the array.
+    #
+    # Not a `while read` over a process substitution, and the fetch is launched with
+    # its stdin closed. hpc/fetch_step.sh runs `ssh -xT` with neither -n nor a stdin
+    # redirect: backgrounded inside a read loop, ssh inherits fd 0 and DRAINS the
+    # loop's own input, so the loop ends after exactly FETCH_PARALLEL iterations.
+    # That is what silently cut this phase to 3 of 21 files, twice.
+    local d h axis
+    local -a pending=()
     while read -r d h axis; do
-        [ -e "${STOP_FLAG}" ] && { echo "STOP flag present; stopping."; break; }
         big_enough "$(staged_path "$d" "$h")" && continue
-        n=$((n+1))
-        fetch_one "$d" "$h" &
+        pending+=("${d} ${h}")
+    done < <(each_sample)
+    echo "${#pending[@]} timesteps to fetch, ${FETCH_PARALLEL} at a time"
+
+    local running=0 spec
+    for spec in "${pending[@]}"; do
+        [ -e "${STOP_FLAG}" ] && { echo "STOP flag present; stopping."; break; }
+        fetch_one ${spec} < /dev/null &
         running=$((running+1))
         if [ "${running}" -ge "${FETCH_PARALLEL}" ]; then wait -n || true; running=$((running-1)); fi
-    done < <(each_sample)
+    done
     wait || true
-    echo "fetch phase done (${n} timesteps attempted)"
+
+    local left=0
+    while read -r d h axis; do
+        big_enough "$(staged_path "$d" "$h")" || left=$((left+1))
+    done < <(each_sample)
+    echo "fetch phase done: ${#pending[@]} attempted, ${left} still missing"
 }
 
 phase_convert() {
     echo "=== convert: one SLURM job per timestep, 00Z first ==="
     local d h axis dep jobid n=0 did00
+    local -a hours
     # Group by date. The 00Z of a day writes that day's accumulation sidecar, and
     # every other hour of the day fails without it, so 00Z goes first and the rest
     # wait on it. Where the sidecar already exists, nothing has to wait.
@@ -232,12 +251,14 @@ phase_convert() {
                 echo "  WARN ${d}: 00Z GRIB exists but the sidecar does not; reconverting 00Z"
                 rm -f "$(grib_file "$d" 00)"
             fi
-            jobid=$(submit_convert "$d" 00)
+            jobid=$(submit_convert "$d" 00 "" </dev/null)
             echo "  ${d}T00  job ${jobid}  (writes the day's sidecar)"
             dep="--dependency=afterok:${jobid}"
             did00=1; n=$((n+1))
         fi
-        while read -r _ h axis; do
+        local -a hours=()
+        while read -r _ h axis; do hours+=("$h"); done < <(each_sample | awk -v D="$d" '$1==D')
+        for h in "${hours[@]}"; do
             [ "$h" = "00" ] && [ "$did00" = "1" ] && continue
             if ! big_enough "$(staged_path "$d" "$h")"; then
                 echo "  skip ${d}T${h}: not staged"; continue
@@ -245,10 +266,10 @@ phase_convert() {
             if [ -f "$(grib_file "$d" "$h")" ]; then
                 echo "  skip ${d}T${h}: GRIB exists"; continue
             fi
-            jobid=$(submit_convert "$d" "$h" "${dep}")
+            jobid=$(submit_convert "$d" "$h" "${dep}" </dev/null)
             echo "  ${d}T${h}  job ${jobid}${dep:+  (after ${dep#*:})}"
             n=$((n+1))
-        done < <(each_sample | awk -v D="$d" '$1==D')
+        done
     done
     echo "submitted ${n} convert jobs"
 }
