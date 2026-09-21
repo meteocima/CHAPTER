@@ -181,7 +181,11 @@ RANGE_OVERRIDE = {
     'sd':  (0.0, 20.0),
     'src': (0.0, 1.0),
     'mucape': (0.0, 10000.0),
-    'mucin':  (-2000.0, 0.1),
+    # CIN is a positive magnitude in the ECMWF convention, not a negative
+    # energy. Measured, not assumed: ERA5's own cin (228001) on 2024-07-15T12
+    # runs 0.016 to 9999 with zero negative values in 37548 points. An earlier
+    # version of this table guessed the opposite sign and failed a correct field.
+    'mucin':  (0.0, 10000.0),
 }
 # Sign the field must have everywhere, whatever the season.
 SIGN = {
@@ -950,9 +954,18 @@ def cmd_compare(args):
             # ONE pass over the GRIB, each message released as soon as it has
             # been used. Holding a whole pressure-level family at once is 169
             # fields of 2.2 million points -- 3 GB -- for no reason.
-            by_key = {}
+            # Eight registry entries carry `levels=[None]`: the converter leaves
+            # the level alone so eccodes applies the one the parameter
+            # definition prescribes -- mostUnstableParcel for mucape/mucin,
+            # nominalTop for tisr/tsr/tsrc/ttr/ttrc, and dl. Keying those on
+            # (shortName, None) matches nothing, so they are matched on
+            # shortName alone and take whatever level the message carries.
+            by_key, by_short = {}, {}
             for token, short, lev, is_pl in wanted:
-                by_key.setdefault((short, lev), []).append((token, is_pl))
+                if lev is None:
+                    by_short.setdefault(short, []).append((token, is_pl))
+                else:
+                    by_key.setdefault((short, lev), []).append((token, is_pl))
             seen = set()
             with open(grib_path(timestep), 'rb') as fh:
                 while True:
@@ -960,9 +973,10 @@ def cmd_compare(args):
                     if gid is None:
                         break
                     try:
-                        key = (eccodes.codes_get(gid, 'shortName'),
-                               eccodes.codes_get(gid, 'level'))
-                        if key not in by_key:
+                        short = eccodes.codes_get(gid, 'shortName')
+                        key = (short, eccodes.codes_get(gid, 'level'))
+                        targets = by_key.get(key) or by_short.get(short)
+                        if not targets:
                             continue
                         message = {
                             'values': _message_field(gid),
@@ -976,13 +990,13 @@ def cmd_compare(args):
                         }
                     finally:
                         eccodes.codes_release(gid)
-                    for token, is_pl in by_key[key]:
+                    for token, is_pl in targets:
                         row = compare_one(token, message, ctx,
                                           level=key[1] if is_pl else None)
                         sink.write(json.dumps(row) + '\n')
                         sink.flush()
                         written += 1
-                        seen.add((token, key[1]))
+                        seen.add((token, key[1] if key in by_key else None))
                         flag = 'FAIL' if row['leg_a']['failures'] else 'ok  '
                         print(f'  {flag} {timestep} {token:<7} lev {key[1]:<5}',
                               flush=True)
