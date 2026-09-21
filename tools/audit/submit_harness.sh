@@ -51,7 +51,32 @@ if [ "${1:-}" = "--dry-run" ]; then
     exit 0
 fi
 
-JOB=$(sbatch --parsable \
+# WHY THE SUBMIT RETRIES, AND WHY IT CAPTURES ONLY STDOUT. Leonardo's slurmctld
+# intermittently loses slurmdbd and then rejects every submission -- including a
+# one-line `echo` job -- with "Invalid account or account/partition combination
+# specified", which reads like a configuration error and is not one. The budget
+# and the associations are fine throughout; it clears by itself.
+#
+# The trap is the retry, not the outage. `sbatch --parsable` prints the job id on
+# stdout but also warns on stderr ("no gres/tmpfs specified, using default"), so
+# a loop that captures `2>&1` and tests the result against ^[0-9]+$ never
+# recognises its own success and keeps resubmitting. That happened here: ten
+# duplicate arrays, all writing the same row files. Capture stdout only.
+submit_with_retry() {
+    local out
+    for attempt in $(seq 1 40); do
+        out=$(sbatch --parsable "$@" 2>/dev/null) || out=""
+        if [[ "${out}" =~ ^[0-9]+$ ]]; then
+            printf '%s' "${out}"
+            return 0
+        fi
+        sleep 60
+    done
+    echo "sbatch refused for 40 minutes; try again later" >&2
+    return 1
+}
+
+JOB=$(submit_with_retry \
     --job-name audit_harness \
     --partition "${PARTITION}" --account "${ACCOUNT}" \
     --nodes 1 --ntasks 1 --cpus-per-task 1 --mem 8G --time 01:00:00 \
