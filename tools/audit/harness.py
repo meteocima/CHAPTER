@@ -154,6 +154,68 @@ LEG_B_IDENTITY = {
     'tirf': (('RAINNC',), ('SNOWNC', 'GRAUPELNC')),
 }
 
+# --- Leg D: identities inside the published archive --------------------------
+# A variable recomputed from OTHER MESSAGES OF THE SAME FILE. No wrfout, no ERA5,
+# so it is repeatable on every file of the archive for ever, not only on the
+# sample -- and it checks the internal consistency of what a user will actually
+# read, which is something legs B and C cannot see.
+#
+# It exists because of the ten variables ERA5 does not carry. For three of them
+# this is the only exact evidence available: leg C is impossible by definition
+# and leg B is unavailable because the converter derives them itself.
+#
+# 'exact'       the formula IS the converter's, restated; a disagreement is a
+#               defect and is asserted.
+# 'approximate' the formula is a physical relation that holds to a tolerance
+#               (a thermodynamic approximation, a different saturation formula).
+#               REPORTED, never asserted: the scatter is the physics, not a bug.
+# 'bracket'     no formula at all, only an inequality that ought to hold at most
+#               points. The weakest kind, and the report says so.
+R_DRY = 287.058
+
+# Siblings are named by shortName alone and their level is resolved from the
+# registry. Writing the level here by hand is how the first version broke: 2t
+# sits on heightAboveGround level 2 and 10u on level 10, not on 0, so every
+# sibling lookup but wz's missed and the rows said "sibling absent". The same
+# class of mistake as assuming a shortName is an identity.
+LEG_D = {
+    'vwsh':  ('exact',
+              'sqrt((100u-10u)^2 + (100v-10v)^2) / 90, the bulk 10-100 m shear',
+              ('100u', '100v', '10u', '10v')),
+    'wz':    ('approximate',
+              'w_z = -omega / (rho g) with rho = p / (R_d T): the two published '
+              'vertical-velocity conventions of the same quantity',
+              ('w', 't')),
+    '2r':    ('approximate',
+              'Magnus saturation ratio from 2t and 2d, against the q/qs the '
+              'converter computes',
+              ('2t', '2d')),
+    '200u':  ('bracket',
+              'wind speed should not fall from 100 m to 200 m at most points',
+              ('100u', '100v', '200v')),
+    '200v':  ('bracket',
+              'the 100 m and 200 m wind vectors should be nearly parallel',
+              ('100u', '100v', '200u')),
+}
+
+
+def _sibling_level(short, own_level):
+    """The level a sibling lives on, from the registry -- never guessed."""
+    entry = _registry_entry(short)
+    if entry is None:
+        return own_level
+    if entry.get('levelType') == 'isobaricInhPa':
+        return own_level          # the same pressure level as the row asking
+    levels = entry['levels']
+    return levels[0] if levels else own_level
+
+
+def _magnus_vapour_pressure(t_kelvin):
+    """Saturation vapour pressure, Magnus over water, hPa."""
+    celsius = t_kelvin - 273.15
+    return 6.112 * np.exp(17.67 * celsius / (celsius + 243.5))
+
+
 # --- Leg A: what cannot be true, whatever the resolution ---------------------
 # Keyed on the unit eccodes declares for the paramId, with per-variable
 # overrides. These are physical impossibilities, not tolerances: a value outside
@@ -805,6 +867,37 @@ class Context:
             self.era_land = era_lsm['values'] > 0.5
         self._sp = None
         self._era5_cache = {}
+        self._siblings = None
+
+    def siblings(self):
+        """Every message leg D needs, from ONE pass over our own file.
+
+        Leg D recomputes a variable from other published messages, so it needs
+        its siblings; reading them per row would walk a 703 MB file once per
+        row. The set is fixed and small -- the near-surface winds, 2t, 2d, and
+        w and t on every pressure level.
+        """
+        if self._siblings is not None:
+            return self._siblings
+        wanted_shorts = set()
+        for spec in LEG_D.values():
+            wanted_shorts.update(spec[2])
+        cache = {}
+        with open(grib_path(self.timestep), 'rb') as fh:
+            while True:
+                gid = eccodes.codes_grib_new_from_file(fh)
+                if gid is None:
+                    break
+                try:
+                    short = eccodes.codes_get(gid, 'shortName')
+                    if short not in wanted_shorts:
+                        continue
+                    cache[(short, eccodes.codes_get(gid, 'level'))] = \
+                        _message_field(gid)
+                finally:
+                    eccodes.codes_release(gid)
+        self._siblings = cache
+        return cache
 
     def era5_messages(self, kind):
         """Every message of one ERA5 file, read once.
@@ -904,6 +997,86 @@ def leg_c(token, message, ctx, level=None):
     return out
 
 
+def leg_d(token, message, ctx, level=None):
+    """Recompute the variable from its siblings in the same file."""
+    spec = LEG_D.get(token)
+    if spec is None:
+        return {'available': False,
+                'why': 'no identity inside the archive relates this variable to '
+                       'others we publish'}
+    kind, formula = spec[0], spec[1]
+    siblings = ctx.siblings()
+
+    def sib(short):
+        return siblings.get((short, _sibling_level(short, level)))
+
+    ours = message['values']
+    if token == 'vwsh':
+        u100, v100 = sib('100u'), sib('100v')
+        u10, v10 = sib('10u'), sib('10v')
+        if any(x is None for x in (u100, v100, u10, v10)):
+            return {'available': False, 'why': 'a sibling message is absent'}
+        expected = np.sqrt((u100 - u10) ** 2 + (v100 - v10) ** 2) / 90.0
+    elif token == 'wz':
+        omega, temperature = sib('w'), sib('t')
+        if omega is None or temperature is None or level is None:
+            return {'available': False, 'why': 'w or t absent at this level'}
+        rho = (level * 100.0) / (R_DRY * temperature)
+        expected = -omega / (rho * G)
+    elif token == '2r':
+        t2, d2 = sib('2t'), sib('2d')
+        if t2 is None or d2 is None:
+            return {'available': False, 'why': '2t or 2d absent'}
+        expected = 100.0 * (_magnus_vapour_pressure(d2)
+                            / _magnus_vapour_pressure(t2))
+    elif token in ('200u', '200v'):
+        u100, v100 = sib('100u'), sib('100v')
+        u200 = ours if token == '200u' else sib('200u')
+        v200 = sib('200v') if token == '200u' else ours
+        if any(x is None for x in (u100, v100, u200, v200)):
+            return {'available': False, 'why': 'a sibling wind component is absent'}
+        speed100 = np.hypot(u100, v100)
+        speed200 = np.hypot(u200, v200)
+        finite = np.isfinite(speed100) & np.isfinite(speed200)
+        rising = float((speed200[finite] >= speed100[finite]).mean())
+        dot = (u100 * u200 + v100 * v200)
+        norm = speed100 * speed200
+        with np.errstate(invalid='ignore', divide='ignore'):
+            cosine = np.where(norm > 1e-6, dot / np.maximum(norm, 1e-30), np.nan)
+        ok = np.isfinite(cosine)
+        return {
+            'available': True, 'kind': kind, 'formula': formula,
+            'n_compared': int(finite.sum()),
+            'fraction_speed_not_falling': rising,
+            'fraction_within_20_degrees': float(
+                (cosine[ok] > math.cos(math.radians(20))).mean()),
+            'note': 'a bracket, not an identity: it catches a swapped level or a '
+                    'flipped sign, and cannot catch an error in the interpolation '
+                    'height',
+        }
+    else:
+        return {'available': False, 'why': 'unhandled'}
+
+    both = np.isfinite(ours) & np.isfinite(expected)
+    if both.sum() == 0:
+        return {'available': False, 'why': 'nothing comparable'}
+    diff = np.abs(ours[both] - expected[both])
+    scale = max(float(np.abs(expected[both]).max()), 1e-30)
+    result = {
+        'available': True, 'kind': kind, 'formula': formula,
+        'n_compared': int(both.sum()),
+        'max_abs_diff': float(diff.max()),
+        'max_rel_diff': float(diff.max() / scale),
+        'median_abs_diff': float(np.median(diff)),
+    }
+    if kind == 'exact':
+        result['agrees'] = bool(diff.max() <= 1e-4 * scale)
+    else:
+        result['note'] = ('a physical approximation, so the scatter is the '
+                          'physics and is reported rather than asserted')
+    return result
+
+
 # =============================================================================
 # One row
 # =============================================================================
@@ -931,6 +1104,7 @@ def compare_one(token, message, ctx, level=None):
         },
         'leg_b': leg_b(token, message, ctx.timestep),
         'leg_c': leg_c(token, message, ctx, level=level),
+        'leg_d': leg_d(token, message, ctx, level=level),
     }
     return row
 
@@ -1028,6 +1202,10 @@ def cmd_compare(args):
                         sink.flush()
                         written += 1
                         seen.add((token, key[1] if key in by_key else None))
+                        d = row['leg_d']
+                        if d.get('kind') == 'exact' and d.get('agrees') is False:
+                            row['leg_a']['failures'].append(
+                                'leg D identity disagrees: ' + d['formula'])
                         flag = 'FAIL' if row['leg_a']['failures'] else 'ok  '
                         print(f'  {flag} {timestep} {token:<7} lev {key[1]:<5}',
                               flush=True)

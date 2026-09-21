@@ -99,6 +99,36 @@ produced at all. The first is a decision and is recorded in `CHAPTER_VARIABLES.m
 second is a limit of the run and is recorded in `MISSING_VARIABLES.md`.
 _Avoid_: missing, excluded — both blur the two.
 
+### Audit
+
+**Verdict**:
+What the audit produces for one variable: a statement about whether the published
+quantity is the one it claims to be, together with what that statement rests on.
+A verdict is one of exactly three things — verified, wrong, or unverifiable — and
+naming which is part of it.
+_Avoid_: result, outcome, status.
+
+**Verified**:
+There is a measurement, and the verdict names which comparison produced it. Not
+"it looks right": a verdict of verified without a named measurement is not a
+verdict.
+
+**Wrong**:
+There is a measurement, and it disagrees. A verdict of wrong carries the issue
+that records the defect, because this map measures and decides but does not
+repair.
+
+**Unverifiable**:
+No comparison exists that could settle the variable, and the verdict says which
+ones were tried and why each failed. **Never a default**: it is reached only
+after the alternatives have been excluded in writing, and a variable nobody got
+round to measuring is not unverifiable, it is unmeasured.
+_Avoid_: unknown, untested — both blur the difference between "there is no way to
+know" and "we did not look".
+
+**Unmeasured**:
+No verdict yet. A state of the audit, never a state of a variable.
+
 ### Orchestration
 
 **Campaign**:
