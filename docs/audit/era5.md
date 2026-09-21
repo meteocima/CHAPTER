@@ -185,6 +185,31 @@ file. They also start at 2024-04, so the 2019 and 2024-01..03 thirds of the
 sample are simply not there. Re-retrieving costs a couple of gigabytes and
 removes a dependency on a tree we do not own.
 
+## What is on disk, and what it cost
+
+`tools/audit/era5_check_set.py` walks the tree and asserts the set against the
+sample rather than against the fetch's own report -- the fetch says what the
+server sent, the tree says what survived, and only the second is evidence.
+It exits non-zero on any gap, so it gates this resolution instead of decorating
+it. It passes:
+
+| | |
+|---|---|
+| files | 32: one single-level and one pressure-level per sample date |
+| single level | 16 x 1896 messages = **30 336** (79 parameters x 24 hours) |
+| pressure level | 15 x 312 + 1 x 624 = **5304** (12 parameters x 13 levels x the sample hours; 2024-07-15 has four) |
+| total | **35 640 messages, 2.6 GiB** |
+| verdict | every sample date, every parameter, every hour, all on `regular_ll` 252 x 149 |
+
+Cost: **45 minutes of wall clock** for 2753 MB, three requests in flight, 4.15
+min per request on average and 0.6 to 10.4 at the extremes -- almost all of it
+CDS queueing rather than transfer. The driver cost **2 seconds of CPU** on the
+login node over the whole run, so the 600 s limit was never in sight; unlike the
+relay fetches, nothing here is decrypted locally at volume.
+
+For scale: the 34 GRIB2 timesteps of our own sample are 22.8 GiB against ERA5's
+2.6, and cost 3.1 core-hours against 45 minutes of somebody else's queue.
+
 ## Where `cdsapi` lives, and why not in the venv
 
 `tools/audit/fetch_era5.py` declares `cdsapi` in a PEP 723 inline block and is
