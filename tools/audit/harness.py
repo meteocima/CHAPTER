@@ -129,7 +129,14 @@ CATEGORICAL = {'tvl', 'tvh', 'slt'}
 # Fields that legitimately carry a bitmap. `fal` is undefined wherever there is
 # no downward shortwave, which at 00Z is the whole domain: measured 2 220 273
 # missing points at 2024-07-15T00 against 1670 at noon.
-BITMAP_EXPECTED = {'sst', 'ci', 'tvl', 'slt', 'dl', 'tsn', 'fal'}
+BITMAP_EXPECTED = {
+    'sst', 'ci',                          # ocean fields, undefined on land
+    'tvl', 'slt', 'dl',                   # masked where the class or lake is absent
+    'tsn',                                # a snow layer that may not exist
+    'fal',                                # albedo, undefined without downward shortwave
+    'swvl1', 'swvl2', 'swvl3', 'swvl4',   # soil is undefined over water
+    'stl1', 'stl2', 'stl3', 'stl4',
+}
 
 LEG_B_IDENTITY = {
     # net radiation, ECMWF sign convention: downward minus upward
@@ -540,11 +547,22 @@ def stats(field, region_mask):
 
 
 def assertions(token, message, values, land_mask):
-    """What cannot be true whatever the season, the grid or the resolution."""
-    failures = []
+    """What cannot be true whatever the season, the grid or the resolution.
+
+    Returns (failures, notes). A note is something a family ticket should see and
+    that is not a defect. Keeping the two apart matters: an earlier version called
+    an all-missing `fal` a failure at all sixteen 00Z timesteps, when an albedo
+    with no downward shortwave is undefined and missing is the correct answer.
+    """
+    failures, notes = [], []
     good = values[np.isfinite(values)]
     if good.size == 0:
-        return ['every value is missing']
+        if token in BITMAP_EXPECTED:
+            notes.append('entirely missing; this field is maskable, so that is '
+                         'legitimate where the condition it depends on is absent '
+                         'from the whole domain')
+            return failures, notes
+        return ['every value is missing'], notes
 
     lo, hi = RANGE_OVERRIDE.get(token,
                                 RANGE_BY_UNIT.get(message['units'], (None, None)))
@@ -571,7 +589,7 @@ def assertions(token, message, values, land_mask):
                     f'({100 * on_land.sum() / land_mask.sum():.1f} per cent of land)')
     elif message['bitmap'] and token not in BITMAP_EXPECTED:
         failures.append('carries a bitmap where none was expected')
-    return failures
+    return failures, notes
 
 
 def read_grib_many(path, wanted):
@@ -893,6 +911,7 @@ def leg_c(token, message, ctx, level=None):
 def compare_one(token, message, ctx, level=None):
     level_hpa = level if message['typeOfLevel'] == 'isobaricInhPa' else None
     regions = ctx.wrf_regions(level_hpa)
+    _fail, _note = assertions(token, message, message['values'], ctx.our_land)
     row = {
         'timestep': ctx.timestep,
         'variable': token,
@@ -907,8 +926,8 @@ def compare_one(token, message, ctx, level=None):
             'bitmap': message['bitmap'],
             'stats': {name: stats(message['values'], mask)
                       for name, mask in regions.items()},
-            'failures': assertions(token, message, message['values'],
-                                   ctx.our_land),
+            'failures': _fail,
+            'notes': _note,
         },
         'leg_b': leg_b(token, message, ctx.timestep),
         'leg_c': leg_c(token, message, ctx, level=level),
@@ -1108,6 +1127,14 @@ def cmd_report(args):
         failures = sorted({f for r in by_var[short] for f in r['leg_a']['failures']})
         for failure in failures:
             print(f'- **`{short}`**: {failure}')
+    notes = [(s2, n) for s2 in sorted(by_var)
+             for n in sorted({x for r in by_var[s2] for x in r['leg_a'].get('notes', [])})]
+    if notes:
+        print()
+        print('Notes (not failures):')
+        for short, note in notes:
+            n_at = sum(1 for r in by_var[short] if note in r['leg_a'].get('notes', []))
+            print(f'- `{short}` at {n_at} of {len(by_var[short])} rows: {note}')
     return 0
 
 
