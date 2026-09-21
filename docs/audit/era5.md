@@ -40,8 +40,8 @@ ticket knows whether it has a control or nothing at all.
 | `200u` | 228239 | single | winds at 10 m and 100 m only |
 | `200v` | 228240 | single | winds at 10 m and 100 m only |
 | `vwsh` | 260068 | single | no vertical speed shear at any level |
-| `mucape` | 228235 | single | `cape` (59), the **surface** parcel, not the most unstable one |
-| `mucin` | 228236 | single | `cin` (228001), likewise surface-parcel |
+| `mucape` | 228235 | single | `cape` (59) — a different parcel search, see below |
+| `mucin` | 228236 | single | `cin` (228001) — and ECMWF says the two are identical in the IFS |
 | `al` | 174 | single | no background albedo; four spectral albedos, `asn` and `fal` |
 | `snowc` | 260038 | single | no snow cover fraction in ERA5 single levels |
 | `tirf` | 235015 | single | no time-integral of rain flux; `lsp` is the nearest |
@@ -49,12 +49,41 @@ ticket knows whether it has a control or nothing at all.
 Two of these deserve a line of their own, because the gap is not the same size
 in each case.
 
-`mucape`/`mucin` are the sharpest: ERA5 has a CAPE and a CIN, with a paramId
-each, and they are **not** ours. A comparison that lines up `mucape` against
-`cape` and reports a bias is measuring the difference between two parcel
-choices, not an error in our converter. The surface-parcel pair is retrieved as
-a control precisely so that the difference can be shown to be that and nothing
-else.
+`mucape`/`mucin` need care, and an earlier version of this file got them wrong.
+It claimed ERA5's `cape` is "the surface parcel". **It is not.** ERA5's CAPE
+considers parcels departing from many model levels below 350 hPa and takes the
+most unstable of them, so it is already a most-unstable-style quantity. MUCAPE
+(228235) only *replaced* CAPE in the operational IFS at cycle **49r1**, and ERA5
+is cycle 41r2. The real differences between `cape` and our `mucape` are the
+depth of the departure-level search and the virtual-temperature correction — not
+surface against most-unstable.
+
+For CIN the distinction is thinner still: ECMWF's own note on the 47r3
+parameters says *"CIN and MUCIN parameters in the IFS are identical, one should
+still use CIN (parameterID=228001) to retrieve the data."*
+
+So `cape` and `cin` are retrieved as controls and are genuinely informative —
+but with the caveat in the next paragraph, which matters more than the parcel
+question.
+
+### ERA5's `cin` is mostly a fill value — do not average it
+
+ECMWF encodes CIN as **missing when it exceeds 1000 J/kg**, "as such magnitudes
+denote that deep moist convection is basically impossible", and in these files
+the missing value arrives as the number **9999**.
+
+Measured on 2024-07-15T12, 37548 points:
+
+| | |
+|---|---|
+| exactly 9999 | **32096 (85.5 per cent)** |
+| genuine values (≤ 1000) | 5452, running 0.0157 to 999.5, mean 312.1 |
+
+A mean taken over the raw field is 8592 J/kg and means nothing. Any use of this
+control has to drop the 9999s first. Our own `mucin` carries no such cap and
+reaches **1236 J/kg** on that timestep — above the threshold at which ECMWF
+declares the parameter missing. That is a difference for family 8 to rule on,
+not an error on its face.
 
 `al` is the opposite shape: we publish paramId 174 from `ALBBCK`, and ERA5
 simply has no 174. Whatever `al` is validated against, it will not be a field of
@@ -67,7 +96,7 @@ nearest ERA5 quantity to something we either refuse to publish or publish from a
 different definition. They are on disk so that a family ticket has its
 comparison already there rather than coming back to CDS for it.
 
-`cape` and `cin` (the surface parcel, against our most-unstable pair);
+`cape` and `cin` (see the caveat above: `cin` is 85.5 per cent fill value);
 `instantaneous_10m_wind_gust` (the other gust convention, against our
 resolved-wind `10fg`); `asn` (the albedo we do not publish, `SNOALB` being an
 annual climatological cap); `lai_lv` and `lai_hv` (refused because the model

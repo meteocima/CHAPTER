@@ -181,11 +181,23 @@ RANGE_OVERRIDE = {
     'sd':  (0.0, 20.0),
     'src': (0.0, 1.0),
     'mucape': (0.0, 10000.0),
-    # CIN is a positive magnitude in the ECMWF convention, not a negative
-    # energy. Measured, not assumed: ERA5's own cin (228001) on 2024-07-15T12
-    # runs 0.016 to 9999 with zero negative values in 37548 points. An earlier
-    # version of this table guessed the opposite sign and failed a correct field.
-    'mucin':  (0.0, 10000.0),
+    # CIN is a positive MAGNITUDE in the ECMWF convention, not a negative
+    # energy, so the floor is zero and not -2000 as an earlier version of this
+    # table guessed. The authority is ECMWF's own documentation of the 47r3 CAPE
+    # and CIN parameters, which speaks of values that "exceed 1000 J/kg" and
+    # shades "CIN values over 50 J.kg-1".
+    #
+    # It is NOT ERA5's cin field, which an earlier version of this comment cited.
+    # That field cannot be read for a range at all: ECMWF encodes CIN as missing
+    # above 1000 J/kg and the missing value arrives as the number 9999, so on
+    # 2024-07-15T12 32096 of its 37548 points -- 85.5 per cent -- are exactly
+    # 9999 and its genuine values stop at 999.5. Citing it was reading a
+    # sentinel as data.
+    #
+    # The ceiling here is a physical impossibility, not ECMWF's 1000 J/kg cap:
+    # we do not apply that cap, and our mucin reaches 1236 J/kg. Whether to
+    # adopt the cap is family 8's decision, so it is reported and not asserted.
+    'mucin':  (0.0, 20000.0),
 }
 # Sign the field must have everywhere, whatever the season.
 SIGN = {

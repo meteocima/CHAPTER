@@ -115,8 +115,13 @@ NOT_IN_ERA5 = {
     '200u':   ('228239', 'sl', 'winds at 10 m and 100 m only'),
     '200v':   ('228240', 'sl', 'winds at 10 m and 100 m only'),
     'vwsh':   ('260068', 'sl', 'no vertical speed shear at any level'),
-    'mucape': ('228235', 'sl', 'only surface-parcel cape (59); the most-unstable parcel is not published'),
-    'mucin':  ('228236', 'sl', 'only surface-parcel cin (228001)'),
+    'mucape': ('228235', 'sl', 'cape (59) instead: ERA5 already searches parcels below 350 hPa, '
+                               'so it is most-unstable-like; MUCAPE replaced CAPE in the IFS only at 49r1 '
+                               'and ERA5 is 41r2. The differences are the search depth and the virtual '
+                               'temperature correction, NOT surface against most-unstable'),
+    'mucin':  ('228236', 'sl', 'cin (228001), which ECMWF says is identical to MUCIN in the IFS -- but the '
+                               'ERA5 field is 85.5 per cent fill value (9999), because CIN above '
+                               '1000 J/kg is encoded as missing'),
     'al':     ('174',    'sl', 'no background albedo; four spectral albedos, snow_albedo and fal instead'),
     'snowc':  ('260038', 'sl', 'no snow cover fraction in ERA5 single levels'),
     'tirf':   ('235015', 'sl', 'no time-integral of rain flux; large_scale_precipitation is the nearest'),
@@ -128,8 +133,8 @@ NOT_IN_ERA5 = {
 # one more field per timestep. Retrieved so a family ticket has the comparison
 # already on disk rather than having to come back to CDS for it.
 SL_CONTROLS = {
-    'convective_available_potential_energy': 'surface-parcel control for mucape',
-    'convective_inhibition':                 'surface-parcel control for mucin',
+    'convective_available_potential_energy': 'control for mucape; a different parcel search, not a different parcel',
+    'convective_inhibition':                 'control for mucin -- BUT 85.5 per cent of it is the 9999 fill value; drop those before using it',
     'instantaneous_10m_wind_gust':           'the other gust convention, against our resolved-wind 10fg',
     'snow_albedo':                           'the albedo we do not publish (SNOALB is a climatological cap)',
     'leaf_area_index_low_vegetation':        'lai_lv, refused because the model carries one LAI per cell',
