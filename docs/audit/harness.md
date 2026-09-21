@@ -106,6 +106,16 @@ The harness fails a variable **only on what cannot be a resolution difference**:
 Everything else — a 5 per cent bias, a smoother field, a lower maximum, a
 correlation of 0.8 — is a number printed for a person to read.
 
+**A masked field is not a failed field.** Every row carries `notes` beside
+`failures`, and a field that is entirely missing where its masking is legitimate
+is a note: `fal` at 00Z, when there is no downward shortwave and an albedo does
+not exist; `tsn` where there is no snow anywhere in the domain. A family ticket
+needs to see those — `tsn` is entirely missing at 7 of the 34 timesteps, which is
+information about snow cover — but reporting them as defects buries the real one.
+The first full-sample run raised 329 failures on eleven variables and **328 of
+them were the harness's own**, from soil fields bitmapped over water and an
+albedo missing at night. One was real.
+
 **There is deliberately no per-variable tolerance table.** Those numbers would be
 invented here, and an invented tolerance converts "I do not know" into "pass",
 which is the failure this whole audit exists to undo.
@@ -143,6 +153,18 @@ can be read against each other.
 
 50 hPa is the model lid with no damping (settled by the configuration ticket),
 so disagreement there is expected and is not by itself a finding.
+
+## The whole sample is already measured
+
+`$WORK/CHAPTER/audit_rows/rows_<timestep>.jsonl`, one file per timestep,
+**34 files and 8364 rows, all 246 messages at all 34 timesteps**, produced in a
+single array so that every family reads numbers from the same pass. A family
+ticket does not need to run the harness before reading: point `report` at the
+rows.
+
+Across the whole sample there are **34 leg A failures and they are all the same
+one** — `ci` carrying no bitmap, at every timestep, which is
+[issue #34](https://github.com/meteocima/CHAPTER/issues/34).
 
 ## Regions
 
