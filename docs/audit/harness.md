@@ -24,6 +24,7 @@ the third has a resolution problem.
 | **A** | the GRIB against itself and against the eccodes parameter definition | none | an impossible range, a wrong sign, a missing or unexpected bitmap |
 | **B** | the GRIB against the wrfout it was made from | **none — same grid, same instant** | a factor, a sign, a unit conversion, a wrong source variable, **to machine precision** |
 | **C** | the GRIB against ERA5 | 59 WRF cells per ERA5 cell | only whether it is the right *quantity* — a definition error |
+| **D** | the GRIB against **other messages of the same file** | none | an identity inside the published archive: a factor, a sign, a swapped level |
 
 Leg B is the strong one. The defect the GRIB1 archive actually carried — `2d`
 written in degC under a paramId defined in K — is caught there exactly, not
@@ -31,6 +32,39 @@ statistically. Leg C exists for a different failure: publishing a mixing ratio
 under a specific-content paramId, or a most-unstable parcel under a
 surface-parcel name. **Leg C cannot see a 5 per cent bias and must never be
 asked to.**
+
+## Leg D: identities inside the published archive
+
+Added for the ten variables ERA5 does not carry. For three of them it is the
+**only exact evidence that can exist**: leg C is impossible by definition and leg
+B is unavailable because the converter derives them itself.
+
+Leg D recomputes a variable from other *published* messages of the same file — no
+wrfout, no ERA5. Two consequences: it is repeatable on **every file of the
+archive for ever**, not only on the sample, and it checks the internal
+consistency of what a user actually reads, which neither B nor C can see.
+
+Three strengths, and the report keeps them apart, because conflating them is how
+a tolerance gets invented:
+
+| kind | variable | formula | measured |
+|---|---|---|---|
+| **exact** | `vwsh` | `sqrt((100u-10u)² + (100v-10v)²) / 90` — the converter's own formula, restated | agrees to **5.1e-07** relative; a disagreement is asserted as a defect |
+| **approximate** | `wz` | `w_z = -ω / (ρg)`, `ρ = p / (R_d T)`, against the published `w` and `t` | median **1e-4 m/s** across all 13 levels |
+| **approximate** | `2r` | Magnus saturation ratio from `2t` and `2d` | median **0.41 %RH** |
+| **bracket** | `200u` `200v` | speed should not fall from 100 m to 200 m; the two vectors should be near-parallel | 74.0 per cent non-falling, **97.66 per cent within 20°** |
+
+Only `exact` is asserted. An `approximate` leg D is a physical relation that holds
+to a tolerance — a thermodynamic approximation, a different saturation formula —
+so the scatter **is** the physics and is reported, never failed. The `bracket` is
+weaker still and says so in the row: it catches a swapped level or a flipped
+sign, and cannot catch an error in the interpolation height.
+
+**Sibling levels come from the registry, never written by hand.** The first
+version hard-coded level 0 and every lookup but `wz`'s missed, because `2t` sits
+on `heightAboveGround` level 2 and `10u` on level 10. Same class of mistake as
+assuming a shortName is an identity — and the harness said "sibling absent"
+rather than comparing against nothing, which is why it was caught.
 
 ## Leg B does not import the converter's tables
 
@@ -129,9 +163,9 @@ clean row:
   3 km field and its 31 km average is of the order of a few per cent for smooth
   fields and far more for anything convective. A genuine 5 per cent error in a
   precipitation field is invisible.
-- **Anything at all, on leg C, for the ten variables ERA5 does not carry**, and
-  for the pressure-level variables leg B is unavailable too — those rest on leg A
-  and on reading the converter.
+- **Anything at all, on leg C, for the ten variables ERA5 does not carry.** Leg D
+  covers five of them and leg B another three; `mucape` and `mucin` have none of
+  the four and are **unverifiable** in the sense `CONTEXT.md` defines.
 - **A systematic error shared by the wrfout and the GRIB.** Leg B compares the
   encoding, not the model. If WRF itself writes a wrong field, leg B says
   "exact".
