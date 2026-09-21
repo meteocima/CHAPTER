@@ -1,0 +1,195 @@
+# The audit harness, and what it can and cannot see
+
+Every family ticket calls `tools/audit/harness.py`; none reimplements it. This
+file is the method it implements and, more importantly, the list of things it
+**cannot** detect — a harness whose limits live only in an issue comment will be
+trusted past them.
+
+```
+source tools/eccodes_env.sh
+uv run python tools/audit/harness.py compare --family 2 --timestep 2024-07-15T12 --out rows.jsonl
+uv run python tools/audit/harness.py compare --variable 2t --all-timesteps --out rows.jsonl
+uv run python tools/audit/harness.py report --rows rows.jsonl
+```
+
+## Three legs, and they are not equally strong
+
+The ticket's title asks how 3 km is compared against 31 km, and the honest first
+answer is that **most of the audit does not need to cross that gap at all**. The
+eight family tickets each ask four things — value, unit, ERA5, mask — and only
+the third has a resolution problem.
+
+| leg | what it compares | grid gap | what it catches |
+|---|---|---|---|
+| **A** | the GRIB against itself and against the eccodes parameter definition | none | an impossible range, a wrong sign, a missing or unexpected bitmap |
+| **B** | the GRIB against the wrfout it was made from | **none — same grid, same instant** | a factor, a sign, a unit conversion, a wrong source variable, **to machine precision** |
+| **C** | the GRIB against ERA5 | 59 WRF cells per ERA5 cell | only whether it is the right *quantity* — a definition error |
+
+Leg B is the strong one. The defect the GRIB1 archive actually carried — `2d`
+written in degC under a paramId defined in K — is caught there exactly, not
+statistically. Leg C exists for a different failure: publishing a mixing ratio
+under a specific-content paramId, or a most-unstable parcel under a
+surface-parcel name. **Leg C cannot see a 5 per cent bias and must never be
+asked to.**
+
+## Leg B does not import the converter's tables
+
+The defect leg B exists to catch is a wrong unit factor, and
+`convert_to_pressure_levels.UNIT_SCALE` is precisely where such a factor would
+live. A harness that read that table would apply the same wrong number to the
+source field and report perfect agreement.
+
+So the expected conversion is derived here, independently, from **metadata on
+both sides**: the wrfout variable's own `units` attribute, and the unit eccodes
+says the paramId is defined in. Neither was written by us. The converter's table
+is then read only to be *disagreed with*: where its factor differs from the one
+the metadata implies, the row says so.
+
+An unknown unit pair is **reported, never guessed at as 1.0**. A silent 1.0 is
+the degC-under-K defect reappearing in the instrument meant to find it.
+
+Three kinds of leg B, and the classification is itself a deliverable:
+
+- **direct** — the registry key *is* a wrfout variable, or one of the seven
+  static sidecar fields. Read it, convert it, compare point for point.
+  Accumulated variables are read at this hour **and at 00Z and subtracted here**,
+  independently of the accumulation sidecar, which is therefore also under test.
+- **identity** — the quantity is a short combination whose definition is not a
+  choice of ours. Net radiation is downward minus upward whoever writes it, and
+  total runoff is surface plus sub-surface, so restating them here is a second
+  opinion rather than a copy. Ten variables: the eight net-radiation fields,
+  `ro` and `tirf`.
+- **none** — the derivation **is** the converter's own algorithm: vertical
+  interpolation to pressure levels, the column integrals, the `skt` inversion,
+  CAPE. Recomputing those independently means writing a second converter.
+  Leg B is unavailable and the verdict rests on legs A and C plus reading the
+  code. This is a limit of the harness, stated rather than hidden.
+
+## Upscaling: WRF to ERA5, never the other way
+
+Averaging discards information WRF has, and what survives is what ERA5 should
+hold. Interpolating ERA5 up to 3 km invents structure and then compares it
+against the real thing.
+
+The upscale is **exact index bucketing, not interpolation**. The WRF grid is
+Mercator, so longitude spacing is constant (0.037944 degrees, measured) and rows
+sit at fixed latitudes; ERA5's is regular lat/lon. The mapping is therefore
+separable — every WRF row falls in one ERA5 latitude band and every column in
+one longitude band — and each WRF cell lies wholly inside one ERA5 cell. No
+weights are computed and nothing is interpolated.
+
+Cells are weighted by **cos²(latitude)**: with `dlon` constant, a Mercator
+cell's physical area goes as cos², and that was checked rather than assumed —
+the ratio of row spacings between the south and north edges of this grid is
+1.8338 against cos(23.4719°)/cos(60.0006°) = 1.8345, agreeing to 0.04 per cent.
+
+Between 43 WRF cells per ERA5 cell at 60 N and 78 at 25 N, 59 on average.
+
+**Categorical fields are not averaged.** Halfway between evergreen broadleaf and
+short grass is not a vegetation type, so `tvl`, `tvh` and `slt` are upscaled by
+**majority** and leg C reports the fraction of ERA5 cells whose dominant class
+agrees, plus each side's class histogram.
+
+**Masked fields average only their valid points**, or the coastline manufactures
+a bias out of nothing.
+
+## What is asserted and what is only reported
+
+The harness fails a variable **only on what cannot be a resolution difference**:
+
+1. a value outside the physically possible range for the declared unit;
+2. a sign the quantity cannot have (`ttr` positive, `tp` negative);
+3. a mask that disagrees with the land-sea mask, including a field defined over
+   water that carries no bitmap;
+4. a bitmap where none belongs.
+
+Everything else — a 5 per cent bias, a smoother field, a lower maximum, a
+correlation of 0.8 — is a number printed for a person to read.
+
+**There is deliberately no per-variable tolerance table.** Those numbers would be
+invented here, and an invented tolerance converts "I do not know" into "pass",
+which is the failure this whole audit exists to undo.
+
+## What it cannot detect
+
+Stated plainly, because a family ticket that does not know this will over-read a
+clean row:
+
+- **A bias smaller than the resolution difference.** Leg C's spread between a
+  3 km field and its 31 km average is of the order of a few per cent for smooth
+  fields and far more for anything convective. A genuine 5 per cent error in a
+  precipitation field is invisible.
+- **Anything at all, on leg C, for the ten variables ERA5 does not carry**, and
+  for the pressure-level variables leg B is unavailable too — those rest on leg A
+  and on reading the converter.
+- **A systematic error shared by the wrfout and the GRIB.** Leg B compares the
+  encoding, not the model. If WRF itself writes a wrong field, leg B says
+  "exact".
+- **An error inside the converter's own algorithms**, for the same reason legs B
+  and none exist: vertical interpolation, column integrals, `skt` and CAPE have
+  no independent source to be read back from.
+- **A time-of-day or seasonal defect from one timestep.** The harness measures
+  what it is given; the sample's three axes exist so a family ticket asks for
+  all 34.
+
+## Below ground and the model lid
+
+Below-ground pressure levels — 1000 hPa over the Alps, 925 over any high
+terrain — are **kept and flagged, never silently dropped**. Whatever the
+vertical interpolation does there is a value a user will read, so it is under
+audit rather than an inconvenience to the statistics: every pressure-level row
+carries an `above_ground` region alongside `all`, `land` and `sea`, and the two
+can be read against each other.
+
+50 hPa is the model lid with no damping (settled by the configuration ticket),
+so disagreement there is expected and is not by itself a finding.
+
+## Regions
+
+Every row carries statistics over **all**, **land** and **sea** separately. A
+land-only defect disappears in a domain mean when two thirds of the box is sea,
+and the split is itself the cheapest mask test there is. Land and sea are taken
+from each side's own mask: ours from the `lsm` message of the same file, ERA5's
+from its own `lsm`, both at 0.5.
+
+## Output
+
+One JSONL row per (variable, level, timestep), each holding the three legs and
+the per-region statistics; `report` turns a set of rows into the Markdown table
+the family docs need. Rows rather than prose, so that eight family tickets do
+not write eight table generators and the numbers stay comparable across
+families, and so a later ticket can re-read a measurement without recomputing it.
+
+`z` is addressed as **`z_sfc`** or **`z_pl`**, never as `z`: two registry rows
+share that shortName — surface orography and pressure-level geopotential — and
+a shortName is therefore not an identity.
+
+## Completeness, and why `compare` says how many rows it expected
+
+`compare` ends by printing `N of M expected rows` and **exits non-zero if the two
+differ**. That is not decoration. This repo has now been bitten three times by a
+run that stopped early and looked finished:
+
+- the staging fetch declared `fetch phase done` after 3 of 21 files;
+- the ERA5 retrieval had to be checked against the tree rather than against its
+  own "all requests satisfied";
+- and this command's first pressure-level run was cut off at **154 of 169 rows**
+  by a shell `timeout`, after which the `report` chained behind it read the
+  truncated file and exited 0 — so the whole thing looked successful and the two
+  missing variables were only found by counting.
+
+A measuring instrument that can stop early without saying so is worse than no
+instrument, because its silence is indistinguishable from a clean result. Never
+chain `compare` and `report` with `;` and read only the last exit code.
+
+## Cost, and the two things that made it affordable
+
+The GRIB is read in **one streaming pass** per timestep, each message released as
+soon as its row is written. The first version collected every wanted message
+first, which for a pressure-level family is 169 fields of 2.2 million points —
+3 GB held for no reason.
+
+The ERA5 file is read **once per timestep and cached**, not re-walked per row. A
+pressure-level family otherwise asks 169 separate times for messages that all
+live in the same 21 MB file, and the re-walking cost more than the comparison
+did.
