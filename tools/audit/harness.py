@@ -110,10 +110,21 @@ FAMILIES = {
 #            minus upward whoever writes it -- so restating it here is a second
 #            opinion, not a copy of the converter.
 # 'none'     the derivation IS the converter's own algorithm (vertical
-#            interpolation, column integrals, the skt inversion, CAPE).
-#            Recomputing it independently means writing a second converter.
-#            Leg B is unavailable and the verdict rests on legs A and C, plus
-#            reading the code. This is a limit of the harness, not a defect.
+#            interpolation, the skt inversion, CAPE). Recomputing it
+#            independently means writing a second converter. Leg B is
+#            unavailable and the verdict rests on legs A and C, plus reading
+#            the code. This is a limit of the harness, not a defect.
+#
+# THE COLUMN INTEGRALS USED TO BE IN THAT LAST LIST AND SHOULD NOT HAVE BEEN.
+# Family 3 (#21) found leg B for all six of them: WRF integrates on a DRY-MASS
+# coordinate, so the column water of species X is not an integral to approximate
+# but the weighted sum sum_k X_k (MU+MUB) |DNW_k| / g, with weights the model
+# itself wrote out. That uses three wrfout fields the converter never opens, so
+# it is a second opinion and not a copy -- and it is exact, where the converter's
+# own pressure quadrature is 3 to 8 per cent off (#46). The six rows below still
+# say 'none' because the measurement lives in tools/audit/f3_columns.py rather
+# than here: moving it in would mean re-running the 34-timestep campaign, and
+# the harness is deliberately not changed under the audit that uses it.
 STATIC_FIELDS = {'cvl', 'cvh', 'tvl', 'tvh', 'slt', 'cl', 'dl'}
 
 # Two registry entries share the shortName `z`: surface orography (key HGT) and

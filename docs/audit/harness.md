@@ -135,10 +135,25 @@ Three kinds of leg B, and the classification is itself a deliverable:
   opinion rather than a copy. Ten variables: the eight net-radiation fields,
   `ro` and `tirf`.
 - **none** — the derivation **is** the converter's own algorithm: vertical
-  interpolation to pressure levels, the column integrals, the `skt` inversion,
-  CAPE. Recomputing those independently means writing a second converter.
-  Leg B is unavailable and the verdict rests on legs A and C plus reading the
-  code. This is a limit of the harness, stated rather than hidden.
+  interpolation to pressure levels, the `skt` inversion, CAPE. Recomputing those
+  independently means writing a second converter. Leg B is unavailable and the
+  verdict rests on legs A and C plus reading the code. This is a limit of the
+  harness, stated rather than hidden.
+
+**The column integrals were in that last list and did not belong there.**
+[Audit family 3](https://github.com/meteocima/CHAPTER/issues/21) found leg B for
+all six of `tcw`, `tcwv`, `tclw`, `tciw`, `tcrw`, `tcsw`. WRF integrates on a
+**dry-mass** vertical coordinate, so the column water of a species is not an
+integral to be approximated but the weighted sum
+`sum_k X_k (MU+MUB) |DNW_k| / g`, whose weights the model itself wrote out —
+three wrfout fields (`MU`, `MUB`, `DNW`) the converter never opens. A second
+opinion, not a copy, and an exact one: it showed the converter's pressure
+quadrature to be 3 to 8 per cent off
+([#46](https://github.com/meteocima/CHAPTER/issues/46)), which legs A and C
+could not have called a defect. The lesson generalises — **a field that is a
+vertical sum has a leg B whatever the harness says** — and the rows still read
+`none` only because the measurement lives in `tools/audit/f3_columns.py`,
+deliberately outside a harness that is under the audit it serves.
 
 ## Upscaling: WRF to ERA5, never the other way
 
@@ -210,9 +225,10 @@ clean row:
 - **A systematic error shared by the wrfout and the GRIB.** Leg B compares the
   encoding, not the model. If WRF itself writes a wrong field, leg B says
   "exact".
-- **An error inside the converter's own algorithms**, for the same reason legs B
-  and none exist: vertical interpolation, column integrals, `skt` and CAPE have
-  no independent source to be read back from.
+- **An error inside the converter's own algorithms**, for the same reason leg B
+  `none` exists: vertical interpolation, `skt` and CAPE have no independent
+  source to be read back from. (Column integrals were listed here too and turned
+  out to have one — see above.)
 - **A time-of-day or seasonal defect from one timestep.** The harness measures
   what it is given; the sample's three axes exist so a family ticket asks for
   all 34.
