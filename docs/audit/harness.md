@@ -47,12 +47,20 @@ consistency of what a user actually reads, which neither B nor C can see.
 Three strengths, and the report keeps them apart, because conflating them is how
 a tolerance gets invented:
 
+Measured over the **whole sample**, 34 timesteps:
+
 | kind | variable | formula | measured |
 |---|---|---|---|
-| **exact** | `vwsh` | `sqrt((100u-10u)² + (100v-10v)²) / 90` — the converter's own formula, restated | agrees to **5.1e-07** relative; a disagreement is asserted as a defect |
-| **approximate** | `wz` | `w_z = -ω / (ρg)`, `ρ = p / (R_d T)`, against the published `w` and `t` | median **1e-4 m/s** across all 13 levels |
-| **approximate** | `2r` | Magnus saturation ratio from `2t` and `2d` | median **0.41 %RH** |
-| **bracket** | `200u` `200v` | speed should not fall from 100 m to 200 m; the two vectors should be near-parallel | 74.0 per cent non-falling, **97.66 per cent within 20°** |
+| **exact** | `vwsh` | `sqrt((100u-10u)² + (100v-10v)²) / 90` — the converter's own formula, restated | **exact at all 34**, worst relative 5.39e-07. A disagreement would be asserted as a defect |
+| **approximate** | `wz` | `w_z = -ω / (ρg)`, `ρ = p / (R_d T)`, against the published `w` and `t` | 442 rows (34 × 13 levels), typical median **8.9e-05 m/s** |
+| **approximate** | `2r` | Magnus saturation ratio from `2t` and `2d` | typical median **0.40 %RH** |
+| **bracket** | `200u` `200v` | speed should not fall from 100 m to 200 m; the two vectors should be near-parallel | 81.8 per cent non-falling; **87.5 to 99.0 per cent within 20°** depending on the timestep |
+
+`wz`'s *worst* relative difference reaches 0.41, and that is not a finding: the
+relative error blows up wherever `w` passes through zero, which on a
+convection-permitting field it does constantly. The median absolute difference —
+**9e-05 m/s against a field reaching 28 m/s** — is the number that means
+something, which is why the row carries both.
 
 Only `exact` is asserted. An `approximate` leg D is a physical relation that holds
 to a tolerance — a thermodynamic approximation, a different saturation formula —
