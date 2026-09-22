@@ -72,6 +72,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import eccodes                                    # noqa: E402
 import wrf_era5_comparison as REG                 # noqa: E402
 import era5_crosswalk as X                        # noqa: E402
+import ifs_humidity as IFS                        # noqa: E402
 
 WORK = Path(os.environ.get('WORK_DIR', '/leonardo_work/AIFPT_AILAMIT/CHAPTER'))
 GRIB_DIR = WORK / 'grib_audit'
@@ -187,8 +188,8 @@ LEG_D = {
               'vertical-velocity conventions of the same quantity',
               ('w', 't')),
     '2r':    ('approximate',
-              'Magnus saturation ratio from 2t and 2d, against the q/qs the '
-              'converter computes',
+              'IFS relative humidity from the published 2t and 2d: '
+              'esat_water(2d)/esat_mixed(2t), the reconstruction a user makes',
               ('2t', '2d')),
     '200u':  ('bracket',
               'wind speed should not fall from 100 m to 200 m at most points',
@@ -210,10 +211,11 @@ def _sibling_level(short, own_level):
     return levels[0] if levels else own_level
 
 
-def _magnus_vapour_pressure(t_kelvin):
-    """Saturation vapour pressure, Magnus over water, hPa."""
-    celsius = t_kelvin - 273.15
-    return 6.112 * np.exp(17.67 * celsius / (celsius + 243.5))
+# Saturation comes from `ifs_humidity`, which carries ECMWF's own constants with
+# the equation numbers they come from. The Magnus formula that used to stand
+# here was wrf-python's, over liquid water at every temperature, and checking a
+# parameter ECMWF defines over the MIXED phase against it is how leg D missed
+# the defect in `2r` (issue #40) instead of finding it.
 
 
 # --- Leg A: what cannot be true, whatever the resolution ---------------------
@@ -234,7 +236,29 @@ RANGE_BY_UNIT = {
 RANGE_OVERRIDE = {
     'msl': (87000.0, 112000.0),
     'sp':  (40000.0, 112000.0),
-    'r':   (0.0, 130.0),          # supersaturation is physical, 130% is not
+    # Supersaturation is physical and the ceiling has to hold the real field,
+    # not the clipped one. The archive's `r` today never exceeds 100 because
+    # `fortran/wrf_user.f90:730` applies MIN(qv/qvs, 1) -- issue #40 -- so these
+    # bounds are set from what the field becomes once that clip is gone AND the
+    # saturation is ECMWF's mixed phase, measured on three timesteps:
+    #
+    #   above ground   max 141.9 per cent, at 300-400 hPa in the ice regime.
+    #                  That is real ice supersaturation, and it is below the
+    #                  homogeneous freezing threshold, which is where it should
+    #                  stop.
+    #   below ground   max 163.1 per cent at 1000 hPa. Not a humidity at all:
+    #                  `q` and `t` are extrapolated below the surface
+    #                  independently, so their ratio there means nothing. Every
+    #                  point above 130 at 1000, 925 and 850 hPa is below ground,
+    #                  and above ground those levels stop at 100.3, 109.4, 115.6.
+    #   at 2 m         max 100.2 over all 34 timesteps: the surface field is
+    #                  pinned by the model's own saturation adjustment, so the
+    #                  clip costs almost nothing there and the bound can be
+    #                  tighter.
+    #
+    # 200 leaves the extrapolation room and still catches a doubling or a unit
+    # error; it is not a tolerance on the physics.
+    'r':   (0.0, 200.0),
     '2r':  (0.0, 130.0),
     # The floor is not zero: the domain contains the Dead Sea, and the lowest
     # point of this orography is -465.6 m at lat 31.345, lon 35.464, which is
@@ -1027,8 +1051,12 @@ def leg_d(token, message, ctx, level=None):
         t2, d2 = sib('2t'), sib('2d')
         if t2 is None or d2 is None:
             return {'available': False, 'why': '2t or 2d absent'}
-        expected = 100.0 * (_magnus_vapour_pressure(d2)
-                            / _magnus_vapour_pressure(t2))
+        # The dewpoint is defined over LIQUID water, by the WMO and by ERA5, and
+        # the relative humidity it feeds is defined over the MIXED phase. Using
+        # both is not an oversight: it is what the two definitions say, and it
+        # is exactly the reconstruction a user will attempt, which is what makes
+        # it the right check. Until #40 is fixed this row measures the defect.
+        expected = 100.0 * IFS.esat_water(d2) / IFS.esat_mixed(t2)
     elif token in ('200u', '200v'):
         u100, v100 = sib('100u'), sib('100v')
         u200 = ours if token == '200u' else sib('200u')

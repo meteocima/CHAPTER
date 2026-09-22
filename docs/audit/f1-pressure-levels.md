@@ -103,6 +103,124 @@ per cent.
 **This corrects [#33](https://github.com/meteocima/CHAPTER/issues/33)**, which
 concluded `2r` has no clip — see the last section.
 
+### The definition that replaces it, from the IFS documentation
+
+Settled 2026-09-22 with the user. Every constant is quoted from **IFS
+Documentation Cy41r2, Part IV: Physical Processes** — Cy41r2 because that is the
+cycle ERA5 was produced with, so it is the cycle whose definition paramId 157
+has to match. The implementation is `tools/audit/ifs_humidity.py`.
+
+Page 112, in words, above Eq. (7.89):
+
+> "currently defined as relative humidity with respect to water for temperatures
+> warmer than 0 °C, with respect to ice for temperatures colder than −23 °C, and
+> a mix of the two in the 0 °C to −23 °C temperature range."
+
+| | |
+|---|---|
+| Eq. (7.89) | `e/esat = p q (1/ε) / (esat (1 + q(1/ε − 1)))`, **ε = R_dry/R_vap = 0.621981** |
+| Eq. (7.90) | `esat = α·esat_water + (1 − α)·esat_ice` |
+| Eq. (7.5), water, Buck (1981) | `a1 = 611.21 Pa, a3 = 17.502, a4 = 32.19 K` |
+| Eq. (7.5), ice, Alduchov & Eskridge (1996) | `a1 = 611.21 Pa, a3 = 22.587, a4 = −0.7 K` |
+| Eq. (7.6), α = **liquid** fraction | 0 below `T_ice`; `((T − T_ice)/(T0 − T_ice))²` between; 1 above `T0` |
+| thresholds | `T_ice = 250.16 K`, `T0 = 273.16 K` |
+
+**α is quadratic, not linear.** The first measurement in this family used a
+linear ice fraction; it got the pure-ice levels right, where both agree, and was
+approximate between 250 and 273 K. The correct quadratic improves exactly there
+— at 500 hPa the ratio against ERA5 goes from 0.971 to **0.995**.
+
+**Nothing in the definition clips.**
+
+The module's `self_check()` verifies the identities rather than assuming them:
+the mixed curve equals the water curve exactly at `T ≥ T0` and the ice curve
+exactly at `T ≤ T_ice`, α is 0 and 1 at the thresholds and **0.25 at the
+midpoint** (a linear α would give 0.5), the curve is monotone and lies between
+the two pure ones, and **saturated air reads exactly 100** in all three regimes.
+
+### Phase or formula? The two changes, separated
+
+Adopting the IFS definition changes two things at once. They are separated here
+so the second is not credited to the first (2024-07-15T12, mean over each level):
+
+| level | phase: `mixed / water` | formula: `Buck / Magnus` |
+|---|---|---|
+| 1000 hPa | 1.000 | 0.994 |
+| 700 hPa | 1.001 | 0.999 |
+| 500 hPa | 1.091 | 1.002 |
+| 400 hPa | 1.248 | 1.005 |
+| 300 hPa | 1.440 | 1.011 |
+| 200 hPa | 1.607 | 1.019 |
+| 100 hPa | **1.793** | 1.039 |
+
+**The phase is the whole story**; the change of formula is under 1 per cent below
+500 hPa and never above 4. And ε = 0.621981 against the kernel's 0.622 is
+3.1e-05 relative — noise.
+
+With the correct constants the agreement with ERA5 is 0.945 to 1.058 at **every**
+level from 1000 to 100 hPa, against 0.505 to 1.052 as published.
+
+### How far above 100 the field actually goes, and where
+
+The clip means nobody has ever seen the real maximum. Measured on three
+timesteps, unclipped and mixed-phase:
+
+| | |
+|---|---|
+| **above ground**, maximum | **141.9 %** at 300–400 hPa, in the ice regime |
+| points above 100 at 400–500 hPa | **32 500 to 117 493** per timestep |
+| **below ground**, maximum | **163.1 %** at 1000 hPa |
+| points above 130 at 1000, 925, 850 hPa | **every one of them is below ground** |
+| the same levels, above ground only | 100.3, 109.4, 115.6 |
+| **at 2 m**, maximum over all 34 timesteps | **100.2 %** |
+
+Two things follow.
+
+**WSM6 does permit ice supersaturation**, and a lot of it — tens of thousands of
+points per timestep at 400–500 hPa, reaching 142 per cent, which is below the
+homogeneous freezing threshold, where it should stop. That signal is **entirely
+absent from the archive today**: first halved by the wrong saturation, then what
+survived was clipped away.
+
+**The extremes above 130 are below-ground extrapolation, not humidity.** `q` and
+`t` are extrapolated below the surface independently, so their ratio there is not
+a physical quantity — a third reason, after the `t` and `z` anomalies, to treat
+1000 and 925 hPa as extrapolations.
+
+So `RANGE_OVERRIDE['r']` is now **(0, 200)**: enough room for the extrapolation,
+still tight enough to catch a doubling or a unit error. `2r` stays at (0, 130),
+which its measured maximum of 100.2 leaves untouched.
+
+### `2r` follows `r`, and `2d` does not — which a user must be told
+
+Decided 2026-09-22. `2r` (260242) is one of the ten parameters **ERA5 does not
+publish**, so there is no external definition to match; the reason to move it to
+the mixed phase is internal consistency — two fields called "relative humidity"
+in one archive must not use two saturations.
+
+`2d` stays a **dewpoint over liquid water**, which is both the WMO definition and
+ERA5's. So the reconstruction `esat_water(2d)/esat_water(2t)` will *not* return
+`2r`, and the size of the gap is:
+
+| | |
+|---|---|
+| where `2t ≥ 273.16 K` | **0.08 to 0.10 %RH** — the two agree |
+| where `2t < 273.16 K` | median 0.09 to 2.27 %RH, **maximum 27.2** |
+| where `2t < 250.16 K` (pure ice) | maximum 20.8 to 27.2 %RH |
+| how many points are sub-freezing | up to **676 276**, 30 per cent of the domain, in February |
+
+**A user who reconstructs humidity from `2t` and `2d` and does not get `2r` back
+is seeing this, not an error.** Above freezing the two agree to a tenth of a per
+cent; below it they diverge by design, because a dewpoint is defined over water
+and a relative humidity over the mixed phase.
+
+The harness's leg D for `2r` now makes exactly that reconstruction, so the
+archive carries the number rather than leaving it to be rediscovered.
+
+A free check falls out of the same measurement: `2d` and `Q2` are mutually
+consistent to **3.6e-4 to 1.1e-2** relative in vapour pressure across the whole
+sample — family 2 can use it rather than re-measure it.
+
 ### 3. `q` and the hydrometeors use different moist air ([#41](https://github.com/meteocima/CHAPTER/issues/41))
 
 The hydrometeors divide by `1 + r_total` (all six species); `q` is written as

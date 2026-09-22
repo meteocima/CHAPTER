@@ -53,8 +53,32 @@ Measured over the **whole sample**, 34 timesteps:
 |---|---|---|---|
 | **exact** | `vwsh` | `sqrt((100u-10u)² + (100v-10v)²) / 90` — the converter's own formula, restated | **exact at all 34**, worst relative 5.39e-07. A disagreement would be asserted as a defect |
 | **approximate** | `wz` | `w_z = -ω / (ρg)`, `ρ = p / (R_d T)`, against the published `w` and `t` | 442 rows (34 × 13 levels), typical median **8.9e-05 m/s** |
-| **approximate** | `2r` | Magnus saturation ratio from `2t` and `2d` | typical median **0.40 %RH** |
+| **approximate** | `2r` | the IFS humidity from the published `2t` and `2d`: `esat_water(2d)/esat_mixed(2t)` | median **0.29 %RH**, **max 20.1** — see below |
 | **bracket** | `200u` `200v` | speed should not fall from 100 m to 200 m; the two vectors should be near-parallel | 81.8 per cent non-falling; **87.5 to 99.0 per cent within 20°** depending on the timestep |
+
+### `2r`'s leg D was measuring the wrong saturation, and so missed a defect
+
+Until family 1 this row used a Magnus ratio over **liquid water**, which is what
+wrf-python computes — so it compared the field against the same definition the
+field was wrongly built with, agreed to 0.40 %RH, and confirmed nothing. It now
+uses ECMWF's own definition (`tools/audit/ifs_humidity.py`, constants quoted from
+IFS Cy41r2 Part IV Eqs. 7.5, 7.6, 7.89, 7.90), and the divergence it reports —
+**median 0.29 %RH, maximum 20.1** on 2024-01-15T12 — *is* the defect of
+[#40](https://github.com/meteocima/CHAPTER/issues/40): `2r` is humidity over
+liquid water, clipped at 100, where the parameter is defined over the mixed
+phase. Once #40 is fixed this row should fall back to the mutual consistency of
+`2d` and `Q2`, measured at **3.6e-4 to 1.1e-2** relative in vapour pressure.
+
+The general lesson, which cost this repo a wrong resolution in
+[#33](https://github.com/meteocima/CHAPTER/issues/33): **a check built from the
+same assumption as the thing it checks cannot fail.** Leg D is only as
+independent as the definition it is written against, and that definition has to
+come from the authority, not from the library that produced the field.
+
+Related: **a clip cannot be seen in the packed maxima.** A value pinned at
+exactly 100 comes back from 24-bit CCSDS packing scattered by a few 1e-6, which
+is indistinguishable from float noise on a ratio reaching 1. Only recomputing
+from the source field tells them apart.
 
 `wz`'s *worst* relative difference reaches 0.41, and that is not a finding: the
 relative error blows up wherever `w` passes through zero, which on a
