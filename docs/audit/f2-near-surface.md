@@ -149,32 +149,43 @@ consistency with `Q2` measured below.
 ## `2r` over the whole sample, with the definition it should have had
 
 Family 1 established that `r` and `2r` are humidity over **liquid water, clipped
-at 100**, where ECMWF defines them over the **mixed phase**
-([#40](https://github.com/meteocima/CHAPTER/issues/40)). The harness's leg D has
-since been rewritten to make the reconstruction a user would make —
-`esat_water(2d)/esat_mixed(2t)`, the dewpoint over water because that is how the
-WMO and ERA5 define it, the humidity over the mixed phase because that is how
-ECMWF defines paramId 260242.
+at 100** ([#40](https://github.com/meteocima/CHAPTER/issues/40)). For `r` on
+pressure levels the phase is wrong too — ECMWF defines paramId 157 over the mixed
+phase, measured. **For `2r` it is not**: decided 2026-09-22, `2r` stays over
+liquid water with `2t` and `2d`, because that is the WMO convention for a
+screen-level humidity at every temperature, because ERA5 publishes no 2 m
+relative humidity at all so there is no ECMWF practice to follow, and because
+nothing joins 2 m to the 1000 hPa level anyway
+([#44](https://github.com/meteocima/CHAPTER/issues/44)). **So `2r`'s only defect
+is the clip.**
 
-Re-run over all 34 timesteps
-(`$WORK/CHAPTER/audit_rows/legd_2r_ifs.jsonl`, because the sample-wide rows
-carry the superseded formula and a complete row set is never overwritten):
+Leg D therefore makes the reconstruction a user makes from the two neighbours,
+both over water, re-run over all 34 timesteps
+(`$WORK/CHAPTER/audit_rows/legd_2r_water.jsonl` — the sample-wide rows carry the
+superseded formula and a complete row set is never overwritten):
 
-| | |
-|---|---|
-| median absolute difference, typical | **0.40 %RH** |
-| worst timestep | **26.2 %RH**, 2024-02-15T00 |
-| worst relative difference | 0.26 |
+| leg D formula | median | worst |
+|---|---|---|
+| `esat_water(2d)/esat_mixed(2t)`, the decision of the morning | 0.40 %RH | **26.2 %RH** |
+| `esat_water(2d)/esat_water(2t)`, the decision that stands | **0.39 %RH** | **2.48 %RH** |
 
-The old leg D — a Magnus ratio over liquid water, the same definition the field
-was wrongly built with — reported 0.40 %RH median and a maximum of 2.49, and
-confirmed nothing. **A check built from the same assumption as the thing it
-checks cannot fail.**
+Ten times tighter at the tail, and the residual is now essentially the clip
+itself plus the dewpoint round trip. After #40 removes the clip it should fall to
+the round trip alone: `2d` and `Q2` are mutually consistent to **3.6e-4 to
+1.1e-2** relative in vapour pressure across the whole sample. That number is
+family 2's, and it is what makes the reconstruction legitimate.
 
-After #40 this row should fall back to the mutual consistency of `2d` and `Q2`,
-which is measured across the whole sample at **3.6e-4 to 1.1e-2** relative in
-vapour pressure. That number is family 2's, and it is what makes the
-reconstruction legitimate in the first place.
+One correction to make in the other direction. This document first said the old
+leg D — a Magnus ratio over liquid water — "confirmed nothing". That is too
+strong for `2r`: under the decision that stands it was measuring the right ratio.
+What it could not do was *distinguish* the clip from ordinary scatter, because at
+2 m the clip removes at most about 2 %RH, which is inside the spread it reported.
+The sharper criticism belongs to `r` on pressure levels, where the phase is wrong
+by a factor of up to 1.8 and the check was built from the same wrong assumption.
+
+**The price, which belongs where a data user meets it:** `r` and `2r` use
+different saturations — mixed phase aloft, liquid water at the screen. A reader
+who takes them as the same quantity will be wrong at cold points.
 
 ## `vwsh`: exact, and the layer is ours
 

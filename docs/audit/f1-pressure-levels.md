@@ -182,44 +182,59 @@ homogeneous freezing threshold, where it should stop. That signal is **entirely
 absent from the archive today**: first halved by the wrong saturation, then what
 survived was clipped away.
 
-**The extremes above 130 are below-ground extrapolation, not humidity.** `q` and
-`t` are extrapolated below the surface independently, so their ratio there is not
-a physical quantity — a third reason, after the `t` and `z` anomalies, to treat
-1000 and 925 hPa as extrapolations.
+**The extremes above 130 are an artifact of this measurement, not of the
+archive.** Below ground `q` and `t` are clamped from about 25 m AGL
+([#44](https://github.com/meteocima/CHAPTER/issues/44)), where the real pressure
+may be 700 hPa; pairing them with the *nominal* 1000 hPa inflates the vapour
+pressure by up to a factor 1.4 and manufactures the 163 per cent. The archive's
+own `r` below ground is the model's own value and is sound.
+
+**That settles how the fix must compute it**: `r` has to be evaluated on model
+levels and then interpolated, exactly as now, and not recomputed from the
+interpolated `q` and `t` at the nominal level pressure. Noted on
+[#40](https://github.com/meteocima/CHAPTER/issues/40).
 
 So `RANGE_OVERRIDE['r']` is now **(0, 200)**: enough room for the extrapolation,
 still tight enough to catch a doubling or a unit error. `2r` stays at (0, 130),
 which its measured maximum of 100.2 leaves untouched.
 
-### `2r` follows `r`, and `2d` does not — which a user must be told
+### `r` takes the mixed phase; `2r` stays over water — two conventions, both right
 
-Decided 2026-09-22. `2r` (260242) is one of the ten parameters **ERA5 does not
-publish**, so there is no external definition to match; the reason to move it to
-the mixed phase is internal consistency — two fields called "relative humidity"
-in one archive must not use two saturations.
+Decided 2026-09-22 and **revised the same day**, after
+[#44](https://github.com/meteocima/CHAPTER/issues/44) showed why the first
+version of the argument did not hold.
 
-`2d` stays a **dewpoint over liquid water**, which is both the WMO definition and
-ERA5's. So the reconstruction `esat_water(2d)/esat_water(2t)` will *not* return
-`2r`, and the size of the gap is:
+The first decision moved **both** `r` and `2r` to the mixed phase, on the ground
+that two fields called "relative humidity" in one archive must not use two
+saturations. That argument assumes `r` and `2r` are neighbours a reader joins.
+**They are not.** On 47.6 per cent of the domain `r` at 1000 hPa is not at
+1000 hPa at all — it is the lowest model level, clamped, at 24 to 27 m above
+ground (#44); where it *is* above ground it sits at 84 to 126 m, with the
+unresolved surface layer in between. The join is not operationally available.
 
-| | |
-|---|---|
-| where `2t ≥ 273.16 K` | **0.08 to 0.10 %RH** — the two agree |
-| where `2t < 273.16 K` | median 0.09 to 2.27 %RH, **maximum 27.2** |
-| where `2t < 250.16 K` (pure ice) | maximum 20.8 to 27.2 %RH |
-| how many points are sub-freezing | up to **676 276**, 30 per cent of the domain, in February |
+What *is* available is `2t`, `2d`, `2r`: same level, same message group, and
+anyone will combine them.
 
-**A user who reconstructs humidity from `2t` and `2d` and does not get `2r` back
-is seeing this, not an error.** Above freezing the two agree to a tenth of a per
-cent; below it they diverge by design, because a dewpoint is defined over water
-and a relative humidity over the mixed phase.
+| | saturation | why |
+|---|---|---|
+| `r`, paramId 157, pressure levels | **mixed phase** | the IFS's own definition of the parameter, and **measured**: recomputing it that way moves the ratio against ERA5 from 0.505 to 0.945 at 100 hPa |
+| `2r`, paramId 260242, screen level | **liquid water** | the WMO convention for a surface humidity at every temperature — a station at −20 °C reports over water — and **ERA5 publishes no 2 m relative humidity at all**, so there is no ECMWF practice to follow |
+| `2d`, paramId 168 | **liquid water** | a dewpoint is over water by definition |
 
-The harness's leg D for `2r` now makes exactly that reconstruction, so the
-archive carries the number rather than leaving it to be rediscovered.
-
-A free check falls out of the same measurement: `2d` and `Q2` are mutually
+So the two saturations are not an inconsistency: they are the observational
+convention at the surface and the model convention aloft. And `2d` and `2r` agree
+again, so the reconstruction a user makes from `2t` and `2d` **returns `2r`**,
+its only residue being the dewpoint round trip — `2d` and `Q2` are mutually
 consistent to **3.6e-4 to 1.1e-2** relative in vapour pressure across the whole
-sample — family 2 can use it rather than re-measure it.
+sample.
+
+**The clip remains the defect in both**, and it is the part that was never in
+doubt.
+
+**The price, which must be stated where a data user will meet it and not only
+here:** `r` and `2r` use different saturations. Someone who reads `r` at 1000 hPa
+and `2r` together and assumes they are the same quantity will be wrong at cold
+points — the mirror image of the trap this audit just removed.
 
 ### 3. `q` and the hydrometeors use different moist air ([#41](https://github.com/meteocima/CHAPTER/issues/41))
 
@@ -307,7 +322,8 @@ is structural rather than a coincidence; its size is in finding 3.
 ### 1000 hPa is below ground on half the domain
 
 `wrf.vinterp` is called with `extrapolate=True`, so below-ground points carry a
-value and **not** a bitmap. At 2024-07-15T12:
+value and **not** a bitmap. **But it does not extrapolate** — see the correction
+below. At 2024-07-15T12:
 
 | level | points below ground | mean `t` there | mean `t` above ground |
 |---|---|---|---|
@@ -317,11 +333,41 @@ value and **not** a bitmap. At 2024-07-15T12:
 | 700 hPa | 12 | 280.3 K | 280.2 K |
 | 600 hPa and above | **0** | — | — |
 
-Nothing is missing: `n_missing` is 0 everywhere. ERA5 extrapolates below ground
-too, so the convention matches — but the two extrapolations are different
-formulas, which is the whole of 1000 hPa's leg C anomaly (`t` bias −1.71 K
-against −0.05 K at 850, `z` correlation 0.108). **A user reading 1000 hPa over
-the Alps is reading an extrapolation, in both archives.**
+Nothing is missing: `n_missing` is 0 everywhere.
+
+#### Correction: it is a clamp, not an extrapolation ([#44](https://github.com/meteocima/CHAPTER/issues/44))
+
+This section first said those values were an extrapolation, and that ERA5
+extrapolates too so the convention matches. **Both halves are wrong**, found by
+joining this family to family 2.
+
+`wrf.vinterp` extrapolates only the field *types* it recognises (`ght`, `t`,
+`p`). The converter hands it a **raw array**, so below ground it **clamps to the
+lowest model level**. Tested against the wrfout at three timesteps and both
+levels, on up to 1 271 533 points:
+
+| | |
+|---|---|
+| `t` against the lowest model level | **max absolute difference exactly 0.0**, 100 % of points |
+| `z` against it | 5e-05 m median |
+| `q` against it | 1e-09 max, 7e-08 relative |
+
+So a user reading 1000 hPa over the Alps is reading **the air at about 25 m above
+the ground there** — a real model state, not an invention, which is better than
+this section originally claimed. It is also why the surface join works:
+`2t − t(1000 hPa)` below ground is −0.9 K at midnight and +1.4 K at noon in July,
+a nocturnal inversion and a superadiabatic daytime surface layer over a 22 m
+interval.
+
+Two things follow that are worse. **`z` contradicts `sp`**: where the surface
+pressure says the 1000 hPa surface is below the terrain, the published `z` puts
+it at a median of +24 to +27 m *above* it, and both messages sit in the same
+file. And **ERA5 does extrapolate**, with a lapse rate, so the two archives
+differ in convention exactly where 1000 hPa is underground — which is most of the
+land, and which is the whole of 1000 hPa's leg C anomaly (`t` bias −1.71 K
+against −0.05 K at 850, `z` correlation 0.108). Filed as
+[#44](https://github.com/meteocima/CHAPTER/issues/44); it needs a decision, not a
+patch.
 
 ### 50 hPa is the model lid, and three independent measurements say so
 

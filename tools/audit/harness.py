@@ -188,8 +188,8 @@ LEG_D = {
               'vertical-velocity conventions of the same quantity',
               ('w', 't')),
     '2r':    ('approximate',
-              'IFS relative humidity from the published 2t and 2d: '
-              'esat_water(2d)/esat_mixed(2t), the reconstruction a user makes',
+              'the reconstruction from the published 2t and 2d, both over '
+              'liquid water: esat_water(2d)/esat_water(2t)',
               ('2t', '2d')),
     '200u':  ('bracket',
               'wind speed should not fall from 100 m to 200 m at most points',
@@ -246,11 +246,17 @@ RANGE_OVERRIDE = {
     #                  That is real ice supersaturation, and it is below the
     #                  homogeneous freezing threshold, which is where it should
     #                  stop.
-    #   below ground   max 163.1 per cent at 1000 hPa. Not a humidity at all:
-    #                  `q` and `t` are extrapolated below the surface
-    #                  independently, so their ratio there means nothing. Every
-    #                  point above 130 at 1000, 925 and 850 hPa is below ground,
-    #                  and above ground those levels stop at 100.3, 109.4, 115.6.
+    #   below ground   max 163.1 per cent at 1000 hPa -- BUT that figure is an
+    #                  artifact of the measurement, not of the archive, and
+    #                  issue #44 says why: below ground `vinterp` CLAMPS to the
+    #                  lowest model level rather than extrapolating, so `q` and
+    #                  `t` there come from about 25 m AGL where the real
+    #                  pressure may be 700 hPa. Pairing them with the nominal
+    #                  1000 hPa inflates the vapour pressure by up to a factor
+    #                  1.4. The archive's own `r` below ground is the model's
+    #                  own value and is sound. Every point above 130 at 1000,
+    #                  925 and 850 hPa is below ground; above ground those
+    #                  levels stop at 100.3, 109.4, 115.6.
     #   at 2 m         max 100.2 over all 34 timesteps: the surface field is
     #                  pinned by the model's own saturation adjustment, so the
     #                  clip costs almost nothing there and the bound can be
@@ -1051,12 +1057,19 @@ def leg_d(token, message, ctx, level=None):
         t2, d2 = sib('2t'), sib('2d')
         if t2 is None or d2 is None:
             return {'available': False, 'why': '2t or 2d absent'}
-        # The dewpoint is defined over LIQUID water, by the WMO and by ERA5, and
-        # the relative humidity it feeds is defined over the MIXED phase. Using
-        # both is not an oversight: it is what the two definitions say, and it
-        # is exactly the reconstruction a user will attempt, which is what makes
-        # it the right check. Until #40 is fixed this row measures the defect.
-        expected = 100.0 * IFS.esat_water(d2) / IFS.esat_mixed(t2)
+        # Both over LIQUID water. `2d` is a dewpoint, which is over water by
+        # definition; `2r` is a SCREEN-LEVEL humidity, and the WMO convention
+        # for those is over water at all temperatures, which is what a station
+        # reports at -20 C. The mixed phase belongs to `r` on pressure levels,
+        # where it is the IFS's own definition of paramId 157 and where it was
+        # measured against ERA5 -- and nothing joins 2 m to 1000 hPa anyway
+        # (issue #44). Decided 2026-09-22; see #40.
+        #
+        # So this is the reconstruction a user makes from the two neighbours,
+        # and after #40 removes the clip its only residue should be the
+        # dewpoint round trip: `2d` and `Q2` agree to 3.6e-4..1.1e-2 relative
+        # in vapour pressure, measured over the whole sample by family 2.
+        expected = 100.0 * IFS.esat_water(d2) / IFS.esat_water(t2)
     elif token in ('200u', '200v'):
         u100, v100 = sib('100u'), sib('100v')
         u200 = ours if token == '200u' else sib('200u')
