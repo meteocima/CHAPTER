@@ -576,10 +576,20 @@ HAIL_MAXK1   m          MAX HAIL DIAMETER K=1
 ```
 
 `CLAUDE.md` established for `WSPD10MAX` alone, by testing monotonicity across hours, that it
-is reset at every history write. **That is now settled from the configuration, and it
-generalises**: with `history_interval = 60`, all seven are 1-hour maxima. The `10fg`
-encoding (reference time H-1, step `0-1`, `stepType=max`) is confirmed, and any future use of
-the other six inherits the same window with no further testing.
+is reset at every history write, and this section originally concluded that the one-hour
+window "is now settled from the configuration, and it generalises" to all seven.
+
+**Corrected 2026-09-25 by [audit family 5](https://github.com/meteocima/CHAPTER/issues/23):
+the configuration states WRF's intent, and the intent is missed on 12 per cent of hours.**
+Measured on six whole days at hourly resolution, `WSPD10MAX` was NOT reset at **17 of 138**
+history writes — zero points below the previous hour, hundreds of thousands bit-for-bit equal
+to it — most often on convective summer days (9 of 23 on 2024-08-15, 0 on both winter days).
+The `10fg` encoding (reference time H-1, step `0-1`, `stepType=max`,
+`typeOfStatisticalProcessing=2`) is confirmed and correct; what is not reliable is that the
+*field* fills that window. See [#49](https://github.com/meteocima/CHAPTER/issues/49).
+
+So the generalisation must be read the other way round: **any future use of the other six
+must test the window rather than inherit it.** None of the six is published today.
 
 `HAIL_MAX2D` / `HAIL_MAXK1` are **not** HAILCAST output — `hailcast_opt = 0` (§f) — and they
 are non-zero on the sample file (max 1.79 cm and 0.68 cm), so they are alive.
