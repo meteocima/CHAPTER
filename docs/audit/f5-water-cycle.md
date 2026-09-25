@@ -351,3 +351,59 @@ it to find the 00Z-referred messages selects the entire file.
   days, chosen because they were whole on disk, not sampled at random.
 - **`ssro` outside the sample.** The claim that `UDROFF` barely moves within a
   day rests on one day at four hours plus the 34-timestep census.
+
+## Repaired: `sf` is all the solid precipitation, `mucin` keeps its gaps
+
+Applied 2026-09-25. Verified as a SLURM job on 2024-02-15T12 — the timestep this
+family measured the defect on — and on 2024-07-15T12 as the summer control,
+because a repair that cannot be shown to be a no-op where it should be is only
+half checked. 246 messages and `check_grib_sanity` clean on both.
+
+### `sf` ([#52](https://github.com/meteocima/CHAPTER/issues/52))
+
+`sf = (SNOWNC + GRAUPELNC) − 00Z`, so paramId 144 means what ECMWF says: all
+solid precipitation reaching the surface.
+
+| | 2024-02-15T12 | 2024-07-15T12 |
+|---|---|---|
+| `\|sf − (SNOWNC+GRAUPELNC−00Z)/1000\|`, max | **1.9e-09 m** | 1.1e-22 m |
+| graupel added, max / domain mean | **11.9747 mm** / 0.00941 mm | 0 / 0 |
+| graupel as a share of the snow mean | **6.44 %** | 0 % |
+| `HAILNC` identically zero | **True** | **True** |
+
+11.9747 mm and 6.44 % are this family's own figures (11.97 mm, 6.4 per cent) to
+the digit, and the summer control is exactly zero at the surface — graupel aloft
+([#47](https://github.com/meteocima/CHAPTER/issues/47)) never reaches it.
+
+`HAILNC` was checked rather than assumed, as #52 asked: identically zero on both,
+consistent with WSM6 having no hail category, so it is not added.
+
+**The three precipitation fields now close.** `tp − sf − tirf` is
+**−8.9e-11 m** in the mean with a worst point of **7.8e-08 m**, and **zero**
+points above 1e-06 m. Before the repair that residual *was* the graupel column,
+11.97 mm at a point — two published fields that should have agreed, and did not.
+
+### `mucin` ([#54](https://github.com/meteocima/CHAPTER/issues/54))
+
+Option 1: a GRIB bitmap where `cape_2d` declined, as ERA5 does. `mucape` keeps
+its zero fill, which is correct there, and the two no longer share one `dense()`.
+
+| | 2024-02-15T12 | 2024-07-15T12 |
+|---|---|---|
+| `mucin` bitmap present | **yes** | **yes** |
+| masked fraction | **94.3 %** | **71.2 %** |
+| **zeros among the present values** | **0** | **0** |
+| range where present | 0.10 … 749.62 | 0.10 … 1236.13 |
+| masked exactly where `mucape < 100` | **True** | **True** |
+| `mucape` bitmap / missing values | no / **0** | no / **0** |
+| `mucape` zeros, left alone | 1 536 450 | 1 020 809 |
+
+94.3 and 71.2 per cent are this family's measured fill fractions, now the masked
+fractions. **Not one zero survives among the published values** — the constant
+that made up most of a winter field is gone rather than reduced, and the mask is
+precisely the Fortran's own 100 J/kg cut-off, not an approximation of it.
+
+The price is density, and it is the intended one: a model trained on the old
+field learned that low-CAPE situations have no convective inhibition, which is
+the inverse of the physics. The seasonal masked fraction goes in the
+user-facing document ([#58](https://github.com/meteocima/CHAPTER/issues/58)).

@@ -183,6 +183,13 @@ NET_RADIATION = {
 # Every name here must also be in accum_ref.ACCUMULATED_VARS, or the sidecar will
 # not hold it and the conversion will abort.
 ACCUM_DEPS = {
+    # sf is ECMWF's paramId 144, "snowfall": ALL solid precipitation reaching
+    # the surface, large-scale and convective together, because IFS has no
+    # graupel category to separate. WSM6 does, so ours has to add it back or
+    # the archive's solid precipitation is short by whatever froze into
+    # graupel rather than snow -- 6.4% of the published snowfall in the domain
+    # mean on a February day, 11.97 mm at a point (issue #52).
+    'SNOWNC': ('SNOWNC', 'GRAUPELNC'),
     'tirf': ('RAINNC', 'SNOWNC', 'GRAUPELNC'),
     'ro':   ('SFROFF', 'UDROFF'),
     **{k: tuple(n for n in pair if n) for k, pair in NET_RADIATION.items()},
@@ -509,6 +516,13 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
 
             if info.get('stepType') == 'accum':
                 values = since_00z(key)
+                if key == 'SNOWNC':
+                    # See ACCUM_DEPS: paramId 144 is all solid precipitation.
+                    # HAILNC is not added -- WSM6 has no hail category and the
+                    # field is identically zero wherever it has been measured.
+                    # With this, tp = sf + tirf closes exactly, since tirf
+                    # already subtracts the graupel.
+                    values = values + since_00z('GRAUPELNC')
                 low = np.nanmin(values)
                 if low < 0:
                     # A GRIB-sourced reference carries ~1e-8 of packing noise;
@@ -800,24 +814,37 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
         try:
             cape = wrf.getvar(ncfile, "cape_2d", timeidx=0, cache=cache)
 
-            def dense(arr):
-                """Fill the gaps cape_2d leaves with zero.
+            def gaps(arr):
+                """True where cape_2d declined to answer.
 
                 The Fortran flags CIN as missing wherever CAPE < 100 J/kg, and
                 CAPE where the parcel has no equilibrium level -- half the
                 domain on a quiet day. wrf-python surfaces that as NaN (not as
                 a mask, so ma.filled would be a no-op) and sometimes as the
-                9.97e36 fill value. Zero is both the physical reading (no
-                available energy, no inhibition) and what keeps the field dense
-                for training; see MISSING_VARIABLES.md.
+                9.97e36 fill value.
                 """
                 a = np.asarray(arr, dtype=float)
-                return np.where(np.isfinite(a) & (np.abs(a) < 1e30), a, 0.0)
+                return ~(np.isfinite(a) & (np.abs(a) < 1e30))
 
+            # mucape and mucin do NOT share a fill, and used to. For CAPE zero
+            # is the physical reading -- no equilibrium level is no available
+            # energy -- and it keeps the field dense for training.
+            #
+            # For CIN it is backwards. A column with no CAPE is normally a
+            # column with a great deal of inhibition: that is usually WHY there
+            # is no CAPE. Writing 0 there reads as "nothing is stopping
+            # convection" precisely where the most is, on 71 to 96 per cent of
+            # the domain, where ERA5 carries 25 to 265 J/kg. A masked field
+            # teaches "unknown here"; a zero-filled one teaches a falsehood,
+            # and that is worse for a model than for a human reader (issue
+            # #54). ERA5 masks it too.
             if want('mucape'):
-                emit('mucape', dense(cape[0].values), "(most unstable, gaps -> 0)")
+                a = np.asarray(cape[0].values, dtype=float)
+                emit('mucape', np.where(gaps(a), 0.0, a), "(most unstable, gaps -> 0)")
             if want('mucin'):
-                emit('mucin', dense(cape[1].values), "(most unstable, gaps -> 0)")
+                a = np.asarray(cape[1].values, dtype=float)
+                emit('mucin', np.where(gaps(a), np.nan, a),
+                     "(most unstable, gaps -> bitmap)")
             del cape
         except Exception as exc:
             print(f"  mucape/mucin: FAILED: {exc}")
