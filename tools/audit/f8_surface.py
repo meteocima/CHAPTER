@@ -346,11 +346,18 @@ def m_cape(steps):
     for ts in steps:
         got = read_family(H.grib_path(ts), ['mucape', 'mucin'])
         ctx = H.Context(ts)
+        # NaN-aware throughout: since #54, `mucin` is MASKED where cape_2d
+        # declined instead of zero-filled, so a plain .max() over the field
+        # returns NaN and a plain == 0.0 counts nothing. The first run of this
+        # gate reported `mucin_max: NaN` for exactly that reason -- the
+        # measurement, not the archive. Comparisons against NaN are already
+        # False, so the counts below are safe, but say so rather than rely on it.
         e = {'timestep': ts,
              'mucape_zero_fraction': float(np.mean(got['mucape'] == 0.0)),
              'mucin_zero_fraction': float(np.mean(got['mucin'] == 0.0)),
-             'mucape_max': float(got['mucape'].max()),
-             'mucin_max': float(got['mucin'].max()),
+             'mucin_masked_fraction': float(np.mean(~np.isfinite(got['mucin']))),
+             'mucape_max': float(np.nanmax(got['mucape'])),
+             'mucin_max': float(np.nanmax(got['mucin'])),
              'mucin_negative_points': int(np.sum(got['mucin'] < 0)),
              'mucin_nonzero_where_mucape_below_100': int(np.sum(
                  (got['mucape'] < 100) & (got['mucin'] > 0))),
