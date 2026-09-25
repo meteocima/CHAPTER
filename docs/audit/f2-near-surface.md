@@ -175,6 +175,27 @@ the round trip alone: `2d` and `Q2` are mutually consistent to **3.6e-4 to
 1.1e-2** relative in vapour pressure across the whole sample. That number is
 family 2's, and it is what makes the reconstruction legitimate.
 
+**The clip was removed on 2026-09-25** and the decision survived the repair
+intact. `2r` is now computed in the converter from the model's own `Q2`, `PSFC`
+and `T2` through `ifs_humidity.relative_humidity_over_water` — the saturation
+unchanged, only the `MIN(qv/qvs, 1)` gone. Measured on the two verification
+files:
+
+| | 2024-07-15T12 | 2024-07-15T00 |
+|---|---|---|
+| maximum | **100.1218** | **100.1221** |
+| points above 101 | 0 | 0 |
+| points within 1e-4 of exactly 100 | **67** | 107 |
+
+Against **18 316** piled at exactly 100 on the 12Z file before, which is the
+clip's own signature and the thing that could never be seen in the packed maxima.
+The maximum lands on the 100.2 measured here over all 34 timesteps, so nothing
+about the field's magnitude changed — only that it is no longer truncated.
+
+Worth recording that the repair had to be undone once: `r` and `2r` were both
+given the mixed phase, following the literal text of #40's fix section, which had
+overtaken this decision by three days. The measurement above is what caught it.
+
 One correction to make in the other direction. This document first said the old
 leg D — a Magnus ratio over liquid water — "confirmed nothing". That is too
 strong for `2r`: under the decision that stands it was measuring the right ratio.

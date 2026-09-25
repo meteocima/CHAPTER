@@ -38,6 +38,8 @@ from wrf_era5_comparison import WRF_TO_ECMWF_PARAMID, PRESSURE_LEVELS, EXPECTED_
 import accum_ref
 # Static land fields come from a geo_em sidecar (see static_ref.py)
 import static_ref
+# Relative humidity as the IFS defines it, which is not what wrf-python computes
+import ifs_humidity
 
 G = 9.80665                 # m/s^2, standard gravity (geopotential)
 WRF_EARTH_RADIUS = 6370000  # m, the sphere WRF integrates on
@@ -361,6 +363,19 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
                            interp_levels=PRESSURE_LEVELS, extrapolate=True,
                            timeidx=0, cache=cache).values
 
+    _pl_cache = {}
+
+    def pl(name):
+        """A named field on the pressure levels, interpolated once.
+
+        `tk` is asked for twice -- once as a published field, once as the
+        temperature `r` saturates against -- and vinterp is the expensive part
+        of a conversion, so the result is kept rather than recomputed.
+        """
+        if name not in _pl_cache:
+            _pl_cache[name] = to_levels(gv(name))
+        return _pl_cache[name]
+
     out = {}
 
     def emit(key, values, note=""):
@@ -408,11 +423,15 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
         return np.asarray(ncfile.variables[name][0], dtype=float) - accum_00z[name]
 
     # WRF's Q* are mixing ratios, per kg of DRY air; every ECMWF water content
-    # (clwc, ciwc, crwc, cswc, and the column integrals) is a SPECIFIC content,
-    # per kg of MOIST air. The conversion is a division by 1 + the total water
-    # mixing ratio. Measured on 2024-07-01T14: 0.8% in the median, 2.2% at most,
-    # always in excess. Computed once on model levels and cached, because the
-    # interpolation to pressure levels is the expensive part.
+    # (q, clwc, ciwc, crwc, cswc, and the column integrals) is a SPECIFIC
+    # content, per kg of MOIST air, and moist air includes the condensate. The
+    # conversion is a division by 1 + the total water mixing ratio. Measured on
+    # the full 3D field at 2024-07-15T12: 2.26% at most, 1.44% at the 99th
+    # percentile, 0.011% in the median -- quote a percentile, not the median,
+    # because most of a 49-level column is dry upper troposphere and the median
+    # says more about the population than about the correction (issue #41).
+    # Computed once on model levels and cached, because the interpolation to
+    # pressure levels is the expensive part.
     HYDROMETEORS = ("QVAPOR", "QCLOUD", "QRAIN", "QICE", "QSNOW", "QGRAUP")
     _moist_cache = {}
 
@@ -446,9 +465,9 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
                     values = np.maximum(values, 0.0)
                     # WRF carries mixing ratios (per kg of DRY air); clwc/ciwc/
                     # crwc/cswc are SPECIFIC contents (per kg of moist air), so
-                    # divide by 1 + the total water mixing ratio. Measured: the
-                    # difference is 0.8% in the median and 2.2% at most, always
-                    # in excess, and it is systematic.
+                    # divide by 1 + the total water mixing ratio -- the same
+                    # denominator `q` takes. Systematic and always in excess:
+                    # 2.26% at most, 1.44% at p99 (issue #41 for the population).
                     values = values * moist_factor(True)
                 elif key == 'CLDFRA':
                     values = np.clip(values, 0.0, 1.0)
@@ -478,36 +497,97 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
 
     # ---------------- derived, pressure levels ------------------------------
     print("\n=== DERIVED (pressure levels) ===")
-    for key in ('tk', 'z', 'rh', 'omega', 'wa'):
+    for key in ('tk', 'z', 'omega', 'wa'):
         if not want(key):
             continue
         try:
-            values = to_levels(gv(key))
+            values = pl(key)
             if key == 'z':
+                # HGT is a height in metres and the surface z is HGT*G, so taking
+                # the column with the same standard gravity keeps the two fields
+                # consistent and makes z/G the model's own height. WRF integrated
+                # with 9.81, so this is 0.034% off ITS hydrostatic balance -- the
+                # trade-off is measured and decided in issue #39.
                 values = values * G           # geopotential height -> geopotential
             emit(key, values)
         except Exception as exc:
             print(f"  {key}: FAILED: {exc}")
 
-    if want('q'):
+    # `q` and `r` are computed together because `r` is defined FROM `q`: sharing
+    # the vapour is what keeps the two fields in the file from disagreeing.
+    if want('q') or want('rh'):
         try:
-            mr = np.maximum(to_levels(gv("QVAPOR")), 0.0)   # mixing ratio
-            emit('q', mr / (1.0 + mr), "(mixing ratio -> specific humidity)")
+            # Specific humidity: per kg of MOIST air, and moist air includes the
+            # condensate, so the denominator is the same `1 + total water` the
+            # hydrometeors use. Dividing by 1 + QVAPOR alone put two definitions
+            # of moist air in one file -- issue #41, up to 1.13% apart.
+            q = np.maximum(pl('QVAPOR'), 0.0) * moist_factor(True)
+            if want('q'):
+                emit('q', q, "(mixing ratio -> specific humidity of moist air)")
+            if want('rh'):
+                # ECMWF's paramId 157, not wrf-python's: saturation over the
+                # MIXED phase and no clip at 100 (issue #40). Over ice the two
+                # differ by up to a factor 1.8, which is the whole of the old
+                # field's 0.505 ratio against ERA5 at 100 hPa.
+                #
+                # COMPUTED ON MODEL LEVELS AND THEN INTERPOLATED, never from the
+                # interpolated q and t at the nominal level pressure. Below
+                # ground vinterp CLAMPS to the lowest model level (#44), so `q`
+                # and `t` at a nominal 1000 hPa come from about 25 m AGL where
+                # the real pressure may be 700: pairing them inflates the vapour
+                # pressure by up to 1.4 and manufactures a 145 per cent that the
+                # model never held. Measured both ways -- see
+                # docs/audit/f1-pressure-levels.md.
+                q_m = np.maximum(np.asarray(gv('QVAPOR').values, dtype=float),
+                                 0.0) * moist_factor(False)
+                emit('rh', to_levels(ifs_humidity.relative_humidity(
+                        q_m,
+                        np.asarray(gv('p', units='Pa').values, dtype=float),
+                        np.asarray(gv('tk').values, dtype=float))),
+                     "(IFS mixed-phase saturation, unclipped, on model levels)")
         except Exception as exc:
-            print(f"  q: FAILED: {exc}")
+            print(f"  q/rh: FAILED: {exc}")
 
     # ---------------- derived, single level ---------------------------------
     print("\n=== DERIVED (single level) ===")
     # wrf-python defaults to degC for dewpoint and hPa for sea level pressure;
     # ask it for the units the ECMWF parameters are defined in. (The GRIB1
     # archive wrote 2d straight through, so its 2d is in degC under paramId 168.)
-    for key, kwargs in (('td2', dict(units='K')), ('rh2', {}), ('slp', dict(units='Pa'))):
+    for key, kwargs in (('td2', dict(units='K')), ('slp', dict(units='Pa'))):
         if not want(key):
             continue
         try:
             emit(key, np.asarray(gv(key, **kwargs).values, dtype=float))
         except Exception as exc:
             print(f"  {key}: FAILED: {exc}")
+
+    if want('rh2'):
+        try:
+            # `2r` is computed here rather than by getvar('rh2') for ONE reason:
+            # to remove the clip at 100 (issue #40). The saturation stays over
+            # LIQUID WATER at every temperature, which is NOT what `r` does one
+            # block above -- decided with the user 2026-09-22, and the reasons
+            # are specific to the screen: it is the WMO convention for a
+            # screen-level humidity, ERA5 publishes no 2 m relative humidity at
+            # all so there is no ECMWF practice to follow (paramId 260242 is not
+            # the 157 of `r`), and nothing joins 2 m to 1000 hPa anyway (#44).
+            # Measured: over water, leg D's reconstruction from 2t and 2d is
+            # 0.39 %RH median and 2.48 worst; over the mixed phase it was 26.2
+            # at the tail. See docs/audit/f2-near-surface.md.
+            #
+            # The price is real and belongs in the user-facing document: `r` and
+            # `2r` saturate differently, and a reader who takes them for the
+            # same quantity will be wrong at cold points.
+            #
+            # There is no condensate at 2 m, so the denominator is 1 + Q2 alone.
+            mr2 = np.maximum(np.asarray(gv('Q2').values, dtype=float), 0.0)
+            emit('rh2', ifs_humidity.relative_humidity_over_water(
+                mr2 / (1.0 + mr2),
+                np.asarray(gv('PSFC').values, dtype=float),
+                np.asarray(gv('T2').values, dtype=float)),
+                "(saturation over liquid water, unclipped)")
+        except Exception as exc:
+            print(f"  rh2: FAILED: {exc}")
 
     if want('skt'):
         try:

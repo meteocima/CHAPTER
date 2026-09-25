@@ -46,7 +46,7 @@ both meaningless. Every number in this document is per level.
 
 ## The three findings
 
-### 1. `z` is 0.034 per cent low, at every point of every level ([#39](https://github.com/meteocima/CHAPTER/issues/39))
+### 1. `z` is 0.034 per cent below WRF's own geopotential — and that is correct ([#39](https://github.com/meteocima/CHAPTER/issues/39), closed as not a defect)
 
 The converter writes `to_levels(getvar('z')) * 9.80665`, but wrf-python built
 that height by dividing WRF's own geopotential by **its own** constant,
@@ -67,9 +67,42 @@ the interpolation. Against `to_levels(getvar('geopt'))`:
 | 50 hPa | −69.60 m²/s² | −7.10 m | −3.415e-04 |
 
 The same relative error to four digits at all thirteen levels: that is what a
-constant factor looks like. It also makes the archive's two geopotentials
-inconsistent — family 7 verified the **surface** `z` as `HGT × 9.80665`, which is
-right, because `HGT` is a genuine height and not a round trip.
+constant factor looks like.
+
+#### Correction: this finding was wrong, and it is closed as not a defect
+
+Everything above is measured and stands. The **conclusion** drawn from it did
+not, and it was caught on 2026-09-25 by measuring the premise before applying the
+fix.
+
+This section went on to claim that the archive's two geopotentials are therefore
+inconsistent, since family 7 verified the surface `z` as `HGT × 9.80665`. **They
+agree exactly.** WRF builds `PHB` from the terrain with *its own* gravity and
+`PH` is identically zero at the ground, so on 1 349 910 land points with
+`HGT > 1 m`:
+
+| | |
+|---|---|
+| `PHB[k=0] / HGT` | min **9.8099998**, max **9.8100010**, median **9.8100004** |
+| `PH[k=0]` | identically **0.0** |
+
+Both fields therefore reduce to `HGT × 9.80665` at the ground. Publishing
+`geopt` straight — the fix [#39](https://github.com/meteocima/CHAPTER/issues/39)
+proposed — would have made the column field `HGT × 9.81` against a surface field
+of `HGT × 9.80665` and *introduced* the 0.034 % inconsistency it was filed to
+remove.
+
+Underneath the wrong conclusion there is a real trade-off, but it is a choice and
+not a bug. ECMWF's paramId 129 takes its height with the standard
+`g0 = 9.80665`; WRF integrated with 9.81; the two cannot both be honoured.
+Decided with the user, in favour of the status quo: **dividing our `z` by
+`g0` recovers WRF's own height in metres, exactly**, and the surface and column
+fields stay consistent. The price accepted is that `z`, `t` and `p` are not
+hydrostatically consistent at the 0.034 % level, which is below the level anyone
+integrates these fields to. It belongs in the user-facing document
+([#58](https://github.com/meteocima/CHAPTER/issues/58)), not in the converter.
+
+Family 7's verification stands; this finding does not.
 
 ### 2. `r` is humidity over liquid water, clipped at 100 ([#40](https://github.com/meteocima/CHAPTER/issues/40))
 
@@ -108,7 +141,7 @@ concluded `2r` has no clip — see the last section.
 Settled 2026-09-22 with the user. Every constant is quoted from **IFS
 Documentation Cy41r2, Part IV: Physical Processes** — Cy41r2 because that is the
 cycle ERA5 was produced with, so it is the cycle whose definition paramId 157
-has to match. The implementation is `tools/audit/ifs_humidity.py`.
+has to match. The implementation is `ifs_humidity.py`.
 
 Page 112, in words, above Eq. (7.89):
 
@@ -248,6 +281,67 @@ reproduces at the top — **2.26 per cent** — and not in the middle. Over the 
 3-D field the median is **0.011 per cent** and the 99th percentile 1.44 per cent.
 A median with no population is not a measurement; most of a 49-level column is
 dry upper troposphere.
+
+## Both repairs are in, and here is what the archive now carries
+
+Applied 2026-09-25 and verified as a SLURM job on 2024-07-15 at 12Z and 00Z: 246
+messages each, `check_grib_sanity` clean, the 00Z accumulations exactly zero.
+
+### `q` (#41): measured against BOTH conventions, not just the intended one
+
+A test that only checks the new convention cannot tell a correct change from a
+no-op, because the two agree wherever there is no condensate — which is most of
+the domain. So the wrfout was read back and both were built:
+
+| | |
+|---|---|
+| `\|published − r_v/(1+r_total)\|`, worst over all levels | **9.3e-10 kg/kg** — packing noise |
+| `\|published − r_v/(1+r_v)\|`, worst | **7.0e-05 kg/kg** |
+| the two conventions differ by | up to **1.102 %** relative, p99 **0.014 %**, median **0.0000 %** |
+
+The published field is the total-water one at every level, and the old one is
+excluded by five orders of magnitude.
+
+### `r` (#40): the phase is fixed, and the below-ground trap was walked into first
+
+The first implementation followed the issue's fix section literally and
+recomputed `r` from the *interpolated* `q` and `t` at the nominal level pressure.
+That is exactly what the section above forbids, and the archive came back with
+**`r` reaching 143.3 % at 1000 hPa** — the artifact, manufactured, not the model's.
+It now computes on model levels from `QVAPOR × moist_factor(False)`, the model's
+own `P + PB` and `tk`, and interpolates the result.
+
+The verification prints both routes side by side, so the diagnosis is in the
+measurement rather than in the argument (2024-07-15T12):
+
+| level | published max | max the wrong way |
+|---|---|---|
+| **1000 hPa** | **99.954** | **143.290** |
+| 925 hPa | 100.100 | 132.543 |
+| 850 hPa | 100.855 | 121.797 |
+| 700 hPa | 101.139 | 101.794 |
+| 300 hPa | 139.688 | 141.729 |
+| 100 hPa | 92.734 | 92.766 |
+
+Far apart below ground, together aloft: that is the signature of the clamp
+([#44](https://github.com/meteocima/CHAPTER/issues/44)) and of nothing else. At
+00Z the same two columns read 100.068 against 145.097 at 1000 hPa.
+
+And the signal the old field did not have is there: **139.7 % at 300 hPa** in the
+ice regime at 12Z, 141.5 at 00Z — against the 141.9 this document predicted above
+ground — with **34 785 points above 100 %** at 400 hPa in one file.
+
+### `2r` (#40): the clip only
+
+| | 12Z | 00Z |
+|---|---|---|
+| maximum | **100.1218** | **100.1221** |
+| points above 101 | 0 | 0 |
+| points within 1e-4 of exactly 100 | **67** | 107 |
+
+Against **18 316** piled at exactly 100 on this timestep before. The maximum
+lands on the 100.2 this audit measured over all 34 timesteps, and the saturation
+stayed over liquid water.
 
 ## What is verified, and on what
 

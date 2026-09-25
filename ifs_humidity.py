@@ -48,11 +48,16 @@ NOTHING IN THE DEFINITION CLIPS THE RESULT. Supersaturation with respect to the
 mixed phase is a state the atmosphere and the model are both allowed to be in,
 and ERA5 publishes it: 127.7 per cent at 400 hPa on our own sample dates.
 
-What this replaces. `wrf.getvar('rh')` and `getvar('rh2')` call
+What this replaces. `wrf.getvar('rh')` and `getvar('rh2')` called
 `fortran/wrf_user.f90:722`, which saturates over LIQUID WATER at every
 temperature (Magnus, 6.112 / 17.67 / 29.65) and then applies
 `MAX(MIN(qv/qvs, 1), 0)`. Over ice that is a different quantity by up to a
 factor 1.8, and the MIN destroys supersaturation irreversibly.
+
+This module lives at the repository root, beside `accum_ref.py` and
+`static_ref.py`, because `convert_to_pressure_levels.py` computes `r` and `2r`
+from it -- it is production code, not an audit tool. The audit scripts import
+the same module, so what they check is what the archive was written with.
 """
 
 import numpy as np
@@ -112,8 +117,16 @@ def relative_humidity(q, p, t):
 def relative_humidity_over_water(q, p, t):
     """The same, but saturating over liquid water at every temperature.
 
-    Not a quantity we publish -- it is here so the audit can separate the two
-    changes, the saturation PHASE and the saturation FORMULA.
+    THIS is what `2r` is, and `relative_humidity` above is what `r` is. The
+    screen-level field keeps the WMO convention -- over water at every
+    temperature, which is what a station reports at -20 C -- because ERA5
+    publishes no 2 m relative humidity for us to follow (paramId 260242 is not
+    `r`'s 157) and because nothing joins 2 m to the 1000 hPa level. Decided
+    2026-09-22; measured in docs/audit/f2-near-surface.md, where reconstructing
+    `2r` over the mixed phase instead costs 26.2 %RH at the tail against 2.48.
+
+    It also lets the audit separate the two changes that #40 made to `r` at
+    once, the saturation PHASE and the saturation FORMULA.
     """
     return 100.0 * vapour_pressure(q, p) / esat_water(t)
 

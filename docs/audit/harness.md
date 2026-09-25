@@ -59,7 +59,7 @@ Measured over the **whole sample**, 34 timesteps:
 ### What leg D can and cannot see, from the `2r` episode
 
 This row now reconstructs `2r` from the published `2t` and `2d`, **both over
-liquid water** — `tools/audit/ifs_humidity.py`, Buck constants from IFS Cy41r2
+liquid water** — `ifs_humidity.py`, Buck constants from IFS Cy41r2
 Part IV Eq. 7.5. It reports **median 0.39 %RH, maximum 2.48** over the sample,
 and the residual is essentially the clip of
 [#40](https://github.com/meteocima/CHAPTER/issues/40) plus the dewpoint round
