@@ -366,12 +366,38 @@ The 443 `dl` cells left inside the Black Sea bounding box are the coastal
 lagoons and delta lakes the rectangle also contains; the box is a lat/lon
 rectangle, not the open sea.
 
-**What could not be re-measured.** #36's sub-freezing table was taken on
-2024-01-15, 2024-02-15 and 2025-02-15, and those wrfout are no longer on disk —
-only March 2024 is. What *is* proven, and is date-independent because it is
-structural, is that `sst` is present on **zero** inland-water cells. Every
-sub-freezing point #36 found on `cl > 0.5` is therefore gone by construction.
-The few that sat on cells this mask calls sea will remain, and correctly: the
-Baltic is brackish and freezes above 271.35 K. Re-measuring the January and
-February counts belongs to the re-verification gate, which regenerates the whole
-34-timestep sample.
+### The three winter timesteps, re-measured
+
+The January and February wrfout were no longer on disk, so they were fetched
+back from the relay — three files, 9.14 GB each, about ten minutes over the
+datamover — rather than left as an inference.
+
+| timestep | below 271.35 K, **before** | **after** | minimum before | minimum after |
+|---|---|---|---|---|
+| 2024-01-15T12 | 4 856 | **49** | 258.1 K | **262.38 K** |
+| 2024-02-15T12 | 1 843 | **7** | **252.3 K** | **266.24 K** |
+| 2025-02-15T12 | 5 957 | **116** | 262.7 K | **263.43 K** |
+
+99.0, 99.6 and 98.1 per cent gone, and the 252.3 K — twenty-one kelvin below the
+freezing point of seawater — with them.
+
+**The residual is physical, and its position proves it.** The points that remain
+sit at latitude 46.3–60.0, 59.4–60.0 and 47.0–60.0 respectively, where 60.0 N is
+the northern edge of the domain; February 2024's residual is seven cells in the
+**Gulf of Finland**, six of them under sea ice. Brackish water freezes above
+271.35 K, which is the 35 PSU figure and nothing like the Baltic's. Masking
+those would be the new defect.
+
+**The component mask beats the one #36 proposed, on #36's own numbers.** That
+issue measured 4 254 of January's 4 856 sub-freezing points on `cl > 0.5`, so a
+lake-fraction mask would have left **602**. The component mask leaves **49**: it
+also catches the inland water whose lake fraction is low.
+
+On the same three files, `swvl1` is present on **0** sea-ice cells and its
+maximum is 0.4745 / 0.4590 / 0.4737, all below the highest RUC porosity of
+0.485. `lsm` differs from the permanent land mask on 3225 / 5259 / 2735 cells —
+the sea ice, and 5259 is exactly the upper figure family 6 measured.
+
+All three: 246 messages, `check_grib_sanity` clean. The wrfout are kept in
+`$WORK/CHAPTER/wrfout_maskcheck/` so the re-verification gate need not fetch
+them again.

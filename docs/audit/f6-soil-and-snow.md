@@ -274,3 +274,11 @@ an artefact of the hourly reclassification and not a measurement, and because
 same file, it differs from the permanent land mask on exactly the 2469 sea-ice
 cells. That is the point: the archive says where the model put ice, and does not
 pretend there is soil beneath it.
+
+Confirmed on three more winter timesteps, fetched back from the relay for the
+purpose (2024-01-15T12, 2024-02-15T12, 2025-02-15T12): `swvl1` present on **0**
+sea-ice cells at each, maximum **0.4745 / 0.4590 / 0.4737** against the highest
+RUC porosity of 0.485, and `lsm` differing from the permanent land mask on
+**3225 / 5259 / 2735** cells. 5259 is exactly the upper figure this document
+measured for the sea-ice population, which is the cross-check: the cells the
+soil mask now excludes are precisely the ones the census counted.
