@@ -407,3 +407,38 @@ The price is density, and it is the intended one: a model trained on the old
 field learned that low-CAPE situations have no convective inhibition, which is
 the inverse of the physics. The seasonal masked fraction goes in the
 user-facing document ([#58](https://github.com/meteocima/CHAPTER/issues/58)).
+
+### `10fg`: the window stays as it is, and the reason is the pipeline
+
+Decided with the user on 2026-09-25, closing
+[#49](https://github.com/meteocima/CHAPTER/issues/49) as a documentation item
+rather than a repair. The go/no-go had provisionally said "repair the encoding";
+working out how showed what that costs.
+
+**Detecting the carry-over needs the previous hour's wrfout, and it is not
+there.** In the step pipeline's default backward order the driver fetches hour
+H, submits its convert, and only then moves to H−1 — so when the convert runs,
+H−1 has not been fetched. Nor is there an intra-file detector: all seven
+`nwp_diagnostics` maxima reset on the same alarm, so when the alarm is missed
+they carry over together and none can witness for another. The excess over the
+instantaneous 10 m wind separates the two populations well in the domain mean
+(0.068–0.311 m/s against 0.499–0.784) but it is statistical, and a `stepRange`
+must not be a guess.
+
+So the exact window would mean changing `fetch_step.sh` to fetch H−1 before
+submitting H's convert, and making each conversion depend on its neighbour the
+way it already depends on the 00Z sidecar. That is ~15 lines in the converter
+and a change to the most fragile file in the project — live code that re-execs
+itself from disk on every respawn, and that once died silently after 22 of 2088
+files because an edit landed during one.
+
+**The judgement: the number is right and the label is wrong.** `10fg`'s value is
+a true maximum of the resolved 10 m wind over *some* window; on 12.3 per cent of
+hours that window is longer than the one hour the message declares. The go/no-go
+rule was to repair where the archive would carry a wrong *number*, and this is
+not that case. A label can be qualified in the user-facing document; the
+scheduler's risk budget is better spent elsewhere, on a field that
+[#50](https://github.com/meteocima/CHAPTER/issues/50) shows is not a gust anyway
+and sits at 0.625 of ERA5's.
+
+Tracked for later as its own issue, not as a blocker.
