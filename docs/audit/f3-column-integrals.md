@@ -398,3 +398,38 @@ deliberately not being changed under the audit that uses it.
 - **The quadrature error was attributed at four timesteps and confirmed on
   twelve**, not on all 34. The pattern is stable enough across seasons and
   species that a fifth significant figure would add nothing.
+
+## Repaired, and verified against both rules
+
+Applied 2026-09-25, commit below. The converter now sums against the dry mass.
+Verified as a SLURM job on 2024-07-15T12: 246 messages, `check_grib_sanity`
+clean, and the columns rebuilt independently of the converter — chunked over
+rows, straight from the wrfout — with **both** rules computed so the change is
+attributed rather than asserted.
+
+The coordinate was checked before being trusted, not after:
+
+| | |
+|---|---|
+| `DNW` sums to | **1.0000000000** |
+| `PSFC` rebuilt from the layer masses | mean **+1.881 Pa**, worst **79.3 Pa** out of ~100 000 |
+
+| field | published | exact | old rule | published − exact | old rule was off by |
+|---|---|---|---|---|---|
+| `tcwv` | 25.54199 | 25.54199 | 26.70224 | 1.9e-06 | **+4.54 %** |
+| `tclw` | 0.02311 | 0.02311 | 0.02387 | 2.4e-07 | +3.30 % |
+| `tcrw` | 0.01370 | 0.01370 | 0.01418 | 9.5e-07 | +3.44 % |
+| `tciw` | 0.00896 | 0.00896 | 0.00866 | 1.5e-08 | **−3.31 %** |
+| `tcsw` | 0.01858 | 0.01858 | 0.01791 | 4.8e-07 | **−3.58 %** |
+| `tcw` | 25.61656 | 25.61656 | 26.77662 | 3.8e-06 | +4.53 % |
+
+The published field is the exact one to **1.9e-06 kg/m²**, packing noise, and the
+sign flip that identified the cause in the first place is reproduced at the
+repair: positive on vapour, cloud water and rain, negative on ice and snow.
+
+**Closure holds.** `tcw` minus its five published components equals the graupel
+column to **7.1e-06 kg/m²**, on a timestep where graupel reaches 27.448 kg/m².
+That is the check that would have caught a species dropped or double-counted, and
+it now also confirms `tcw` uses the same zero clip as its components — which it
+did not before ([#47](https://github.com/meteocima/CHAPTER/issues/47)).
+

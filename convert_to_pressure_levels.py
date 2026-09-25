@@ -806,27 +806,64 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
     species_keys = {'QCLOUD': 'tclw', 'QICE': 'tciw', 'QRAIN': 'tcrw', 'QSNOW': 'tcsw'}
     if want('tcw') or want('tqv') or any(want(k) for k in species_keys.values()):
         try:
-            pres_pa = gv("pressure").values * 100.0
-            dp = np.abs(np.diff(pres_pa, axis=0))
-            dp = np.concatenate([dp, np.zeros_like(dp[-1:])], axis=0)
-            # Same mixing-ratio -> specific-content conversion as on the
-            # pressure levels: the column integral of a specific content.
-            moist = moist_factor(False)
-            qv = gv("QVAPOR").values * moist
+            # WRF integrates on a DRY-MASS vertical coordinate, so a column of
+            # water is not an integral to approximate: it is a weighted sum
+            # whose weights the model itself wrote out.
+            #
+            #     dry mass of layer k   dm_k = (MU + MUB) * |DNW_k| / g   [kg/m2]
+            #     column of species X        = sum_k  X_k * dm_k
+            #
+            # exactly, because WRF's Q* are mixing ratios, per kg of DRY air.
+            # And NO moist factor here, unlike the pressure-level hydrometeors:
+            #     q_specific * dm_total = r_mixing * dm_dry
+            # so a mixing ratio integrated against dry mass already IS the water
+            # mass. It is the same quantity ECMWF defines, written the other way
+            # round.
+            #
+            # What this replaces was a left-endpoint Riemann sum over mass-level
+            # pressure differences, which weighted the mass lying ABOVE level k
+            # by the value AT level k (issue #46). Domain means: +5.1% on tcwv,
+            # +7.8% on tcrw, and NEGATIVE on ice and snow, whose profiles
+            # increase upward -- the sign flip is what identified the cause. It
+            # also dropped the mass between the ground and the lowest model
+            # level (~25 m AGL) and zeroed the topmost layer. It carried most of
+            # the archive's apparent moist bias against ERA5: tcw in July went
+            # from 1.076 of ERA5 to 1.031.
+            #
+            # sum_k X_k dnw_k mu / g is contracted over k first, so nothing 3-D
+            # is allocated for the weights: at 49 x 1353 x 1641 that would be
+            # another 871 MB.
+            dnw = np.abs(np.asarray(ncfile.variables['DNW'][0], dtype=float))
+            assert abs(dnw.sum() - 1.0) < 1e-9, \
+                f"DNW sums to {dnw.sum()!r}, so this is not the dry-mass coordinate"
+            mu_over_g = (np.asarray(ncfile.variables['MU'][0], dtype=float)
+                         + np.asarray(ncfile.variables['MUB'][0], dtype=float)) / G
+
+            def column(name):
+                """Dry-mass column integral of one species, kg/m2.
+
+                Clipped at zero like every other water field here: advection
+                undershoot leaves ~-1e-6 kg/kg and a mixing ratio cannot be
+                negative. `tcw` used to skip this clip while its own components
+                applied it -- see issue #47.
+                """
+                x = np.maximum(np.asarray(gv(name).values, dtype=float), 0.0)
+                return np.tensordot(dnw, x, axes=(0, 0)) * mu_over_g
+
             if want('tqv'):
-                emit('tqv', np.sum(qv * dp / G, axis=0))
+                emit('tqv', column('QVAPOR'), "(dry-mass column)")
             if want('tcw'):
-                total = qv.copy()
+                total = column('QVAPOR')
                 for name in ("QCLOUD", "QRAIN", "QICE", "QSNOW", "QGRAUP"):
-                    total += gv(name).values * moist
-                emit('tcw', np.sum(total * dp / G, axis=0))
+                    total += column(name)
+                # Six species, where ECMWF's paramId 136 defines five: the
+                # graupel residual is documented, not dropped (issue #47).
+                emit('tcw', total, "(dry-mass column, six species)")
                 del total
-            # Per-species columns, from the same dp. The fields are already in
-            # the cache from tcw, so this costs one reduction each.
             for name, key in species_keys.items():
                 if want(key):
-                    emit(key, np.sum(np.maximum(gv(name).values, 0.0) * moist * dp / G, axis=0))
-            del dp, pres_pa, qv
+                    emit(key, column(name), "(dry-mass column)")
+            del dnw, mu_over_g
         except Exception as exc:
             print(f"  column integrals: FAILED: {exc}")
 
