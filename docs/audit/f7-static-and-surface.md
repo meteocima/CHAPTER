@@ -299,3 +299,79 @@ this one passes it. The verdict rests on legs A and B and on the table above.
 - **Family 6** shares the moving mask: `swvl1-4` and `stl1-4` follow the hourly
   `lsm`, which is verified here to move exactly with the sea ice. That is a
   result family 6 can use rather than re-measure.
+
+## Repaired: one masking rule, and why the issue's own cure could not be used
+
+Applied 2026-09-25. The rule settled with the user across
+[#34](https://github.com/meteocima/CHAPTER/issues/34),
+[#36](https://github.com/meteocima/CHAPTER/issues/36) and
+[#38](https://github.com/meteocima/CHAPTER/issues/38) is:
+
+> **A point is masked where the ERA5 parameter is not defined there.**
+
+### The discriminator had to be found, not taken from the issue
+
+#36 proposed "water, minus the cells `geo_em` calls lake". That is circular: the
+defect *is* that geo_em calls the Black Sea a lake. Two candidates were measured
+before one was chosen.
+
+**Connectivity from the domain edge fails.** The Bosporus is about 700 m wide
+against a 3 km grid, so the Black Sea and the Sea of Azov form a component that
+does **not** touch the edge — they would be classified inland, which is exactly
+the cells the defect is about. Lake Ladoga, clipped by the northern boundary,
+would be classified ocean.
+
+**Component size works, with a wide margin.** The water components of this
+geo_em:
+
+| cells | what it is | touches the edge |
+|---|---|---|
+| 844 431 | Atlantic + Mediterranean + Baltic + North Sea | yes |
+| 49 841 | Black Sea + Sea of Azov | **no** |
+| 8 583 | Red Sea | yes |
+| 1 225 | Vänern, the largest inland lake in the domain | no |
+| 856, 760, 402, 318, … | the other lakes | no |
+
+Nothing lies between 1 225 and 8 583, so any threshold in that range selects
+those three components and no others — checked at **1226, 2000, 4000 and 8583,
+all giving 902 855 ocean cells**. `static_ref.OCEAN_MIN_CELLS = 2000` is not a
+tuned parameter, and `static_ref.py` prints the realised margin at every
+extraction so a different geo_em cannot reclassify a sea in silence.
+
+Also checked rather than assumed: geo_em's `LANDMASK` and `LU_INDEX ∈ {17, 21}`
+agree on **all 2 220 273 cells**, so "permanent land" is unambiguous.
+
+The masks live in the sidecar, not the converter, because neither question can
+be answered from an hourly wrfout: WRF recodes the lake class to water at init
+and flips `LANDMASK` where sea ice forms.
+
+### Verified on a winter file
+
+2024-03-20T12 — the canonical sea-ice date, 2469 ice cells. 246 messages,
+`check_grib_sanity` clean.
+
+| check | result |
+|---|---|
+| `sst` and `ci` both carry a bitmap | **yes**, 1 317 418 missing each |
+| masked identically, and present exactly on the sea | **True** / **True** |
+| `sst` present on inland water | **0 cells** |
+| `sst` minimum | **271.463 K**, above the 271.35 K freezing point of seawater |
+| `cl` mean over the Black Sea box | **0.0038**, against 0.993 before (ERA5: 0.0001) |
+| `dl` present in that box | **443** cells, against 49 511 at the 10.0 m WPS default |
+| `dl` present anywhere | 32 000 cells, 0.10 to 188.00 m |
+| `lsm` still equals the wrfout's own `LANDMASK` | **True** — it must |
+| `lsm` differs from permanent land on | **2469** cells, exactly the sea ice |
+
+The 443 `dl` cells left inside the Black Sea bounding box are the coastal
+lagoons and delta lakes the rectangle also contains; the box is a lat/lon
+rectangle, not the open sea.
+
+**What could not be re-measured.** #36's sub-freezing table was taken on
+2024-01-15, 2024-02-15 and 2025-02-15, and those wrfout are no longer on disk —
+only March 2024 is. What *is* proven, and is date-independent because it is
+structural, is that `sst` is present on **zero** inland-water cells. Every
+sub-freezing point #36 found on `cl > 0.5` is therefore gone by construction.
+The few that sat on cells this mask calls sea will remain, and correctly: the
+Baltic is brackish and freezes above 271.35 K. Re-measuring the January and
+February counts belongs to the re-verification gate, which regenerates the whole
+34-timestep sample.

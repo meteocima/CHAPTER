@@ -44,13 +44,53 @@ import tempfile
 
 import numpy as np
 
-STATIC_SCHEMA_VERSION = 1
+STATIC_SCHEMA_VERSION = 2
 
 STATIC_FILENAME = 'chapter_static_d02.npz'
 
 # Fields the sidecar carries, in registry order. NaN means "missing" and the
 # converter turns it into a GRIB bitmap.
 STATIC_VARS = ['cvl', 'cvh', 'tvl', 'tvh', 'slt', 'cl', 'dl']
+
+# Masks the sidecar carries but does NOT publish. They are here, and not in the
+# converter, because they cannot be rebuilt from an hourly wrfout: WRF recodes
+# the lake class to water at runtime (sf_lake_physics=0), and it flips LANDMASK
+# from 0 to 1 wherever sea ice forms. Only geo_em still knows which water is
+# inland and which land is permanent.
+#
+#   ocean_mask  1 on the sea, 0 on land AND on inland water
+#   land_mask   1 on permanent land, 0 on all water -- unaffected by sea ice
+#
+# Both are 0/1 float32, read back with `> 0.5`.
+STATIC_MASKS = ['ocean_mask', 'land_mask']
+
+# A water cell belongs to the ocean if its connected component of water has at
+# least this many cells. Not a tuned parameter: MEASURED on this geo_em, the
+# water components are
+#
+#     844431  Atlantic + Mediterranean + Baltic + North Sea   (touches the edge)
+#      49841  Black Sea + Sea of Azov                         (does NOT)
+#       8583  Red Sea                                         (touches the edge)
+#       1225  Vanern, the largest inland lake in the domain
+#        856, 760, 402, 318, ...  the other lakes
+#
+# so ANY threshold between 1226 and 8583 selects exactly those three components
+# and nothing else -- checked at 1226, 2000, 4000 and 8583, all giving 902855
+# ocean cells. A factor of seven of slack.
+#
+# Why a component rule at all, rather than "water minus the cells geo_em calls
+# lake", which is what issue #36 proposed: geo_em CALLS the Black Sea a lake.
+# WPS's MODIS class 21 covers it, the Sea of Azov and part of the Baltic --
+# together 89 per cent of the cells this domain marks as fully lake -- so using
+# the lake class as the discriminator would mask `sst` off the Black Sea. The
+# defect and the proposed cure share a cause.
+#
+# Why not "the component that touches the domain edge": the Bosporus is about
+# 700 m wide and this grid is 3 km, so the Black Sea is NOT connected to the
+# Mediterranean here (measured). It would be classified inland -- again exactly
+# the cells the defect is about. Lake Ladoga, meanwhile, IS clipped by the
+# northern boundary and would be classified ocean.
+OCEAN_MIN_CELLS = 2000
 
 # ---------------------------------------------------------------------------
 # Land-use crosswalk: MODIS-IGBP 21 (MMINLU=MODIFIED_IGBP_MODIS_NOAH) -> ECMWF
@@ -117,6 +157,41 @@ SOILCAT_ORGANIC = 13     # STATSGO 'ORGANIC MATERIAL' in SOILPARM.TBL section ST
 GRID_TOL_DEG = 1e-5
 
 
+def _ocean_mask(lu_index, land):
+    """1 on the sea, 0 on land and on inland water. See OCEAN_MIN_CELLS.
+
+    Connected components of the water cells; a component is ocean if it is at
+    least OCEAN_MIN_CELLS across. scipy is imported here and not at module
+    scope so that the converter, which only ever READS the sidecar, does not
+    take a dependency on it.
+    """
+    from scipy import ndimage
+
+    water = ~land
+    if not np.array_equal(water, np.isin(lu_index, (17, LAKE_CLASS))):
+        raise ValueError(
+            "geo_em's LANDMASK and LU_INDEX disagree about which cells are "
+            "water; the ocean mask assumes they are the same set")
+    labels, n = ndimage.label(water)
+    if n == 0:
+        raise ValueError("geo_em has no water at all, which cannot be this domain")
+    sizes = ndimage.sum_labels(np.ones_like(labels), labels,
+                               index=np.arange(1, n + 1)).astype(np.int64)
+    keep = np.flatnonzero(sizes >= OCEAN_MIN_CELLS) + 1
+    if keep.size == 0:
+        raise ValueError(
+            f"no water component reaches {OCEAN_MIN_CELLS} cells "
+            f"(largest is {sizes.max()}), so this is not the CHAPTER domain")
+    ocean = np.isin(labels, keep)
+    # The threshold must not sit near a component boundary, or a different
+    # geo_em would silently reclassify a sea. Report the margin it actually had.
+    below = sizes[sizes < OCEAN_MIN_CELLS]
+    print(f"  ocean mask: {keep.size} water components of "
+          f"{sizes[keep - 1].min()} cells or more kept ({int(ocean.sum())} cells); "
+          f"largest component left inland is {int(below.max()) if below.size else 0}")
+    return ocean
+
+
 def static_path(static_dir):
     """Path of the sidecar inside static_dir."""
     return os.path.join(static_dir, STATIC_FILENAME)
@@ -160,7 +235,7 @@ def load_static(static_dir):
     with np.load(path) as z:
         fields = {k[4:]: z[k] for k in z.files if k.startswith('var_')}
         meta = {k[5:]: str(z[k]) for k in z.files if k.startswith('meta_')}
-    missing = [v for v in STATIC_VARS if v not in fields]
+    missing = [v for v in STATIC_VARS + STATIC_MASKS if v not in fields]
     if missing:
         raise KeyError(f"static sidecar {path} lacks {missing} "
                        f"(schema version {meta.get('static_schema_version')}); re-extract it")
@@ -274,19 +349,34 @@ def derive_from_geo_em(path):
                          np.round(get('SANDFRAC') * 100.0, 4),
                          np.asarray(get('SCT_DOM'), dtype=int), land)
 
+        # The two masks the hourly output can no longer express. See
+        # STATIC_MASKS and OCEAN_MIN_CELLS for why they have to live here.
+        lu_index = np.asarray(get('LU_INDEX'), dtype=int)
+        ocean = _ocean_mask(lu_index, land)
+
         # cl: the MODIS inland-water fraction. It is NOT redundant with lsm --
         # 19309 cells with LANDMASK==1 carry a sub-grid lake, and WRF itself
         # threw the class away at runtime (sf_lake_physics=0 recodes 21 -> 17).
+        #
+        # Zero on the ocean, which is where WPS's lake class is simply wrong:
+        # it calls the Black Sea a lake at cl = 0.993 against ERA5's 0.0001.
+        # ZERO and not missing, because ERA5's cl IS defined over the sea and
+        # is ~0 there -- the rule is "masked where the ERA5 parameter is not
+        # defined", and this one is (issue #36).
         cl = landusef[LAKE_CLASS - 1].copy()
+        cl[ocean] = 0.0
 
-        # dl: GLDB lake depth, masked off-lake. The mask is not cosmetic --
-        # LAKE_DEPTH is exactly 10.0 m (the WPS default fill) on 99.56% of the
-        # domain, so an unmasked field would ship a fake lake everywhere.
+        # dl: GLDB lake depth, masked off-lake -- and now off the sea with it,
+        # since cl is zero there. The mask is not cosmetic: LAKE_DEPTH is
+        # exactly 10.0 m (the WPS default fill) on 99.56% of the domain, and on
+        # the Black Sea it read 10.0 m against a true 2209.8 m.
         dl = get('LAKE_DEPTH')
         dl[cl <= 0] = np.nan
 
         fields = {'cvl': cvl, 'cvh': cvh, 'tvl': tvl, 'tvh': tvh,
-                  'slt': slt, 'cl': cl, 'dl': dl}
+                  'slt': slt, 'cl': cl, 'dl': dl,
+                  'ocean_mask': ocean.astype(np.float32),
+                  'land_mask': land.astype(np.float32)}
         meta = {
             'static_schema_version': STATIC_SCHEMA_VERSION,
             'source_path': os.path.abspath(path),
@@ -381,6 +471,9 @@ def _cli(argv):
         finite = a[np.isfinite(a)]
         print(f"  {k:4s} {finite.min():.4g}..{finite.max():.4g}  "
               f"present {finite.size} / {a.size}")
+    for k in STATIC_MASKS:
+        a = np.asarray(fields[k], dtype=float)
+        print(f"  {k:11s} {int((a > 0.5).sum())} of {a.size} cells set")
     return 0
 
 

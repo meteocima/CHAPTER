@@ -330,10 +330,20 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
     # the 00Z accumulation reference. A missing or mismatched sidecar must abort
     # the run rather than quietly write a file without the static block.
     static_fields = {}
+    # The sidecar carries two MASKS besides the seven published fields, and they
+    # are needed by fields that are not static at all: sst and ci (which water
+    # is sea), and the eight soil columns (which land is permanent). Neither
+    # question can be answered from an hourly wrfout -- WRF recodes lakes to
+    # water at init and flips LANDMASK where sea ice forms -- so geo_em is a
+    # hard dependency for these eleven too. See static_ref.STATIC_MASKS.
+    MASK_DEPENDENT = (['SST', 'SEAICE']
+                      + [f'{p_}{i}' for p_ in ('swvl', 'stl') for i in range(1, 5)])
     wanted_static = [k for k in static_ref.STATIC_VARS if want(k)]
-    if wanted_static:
+    wanted_masks = [k for k in MASK_DEPENDENT if want(k)]
+    if wanted_static or wanted_masks:
         if not static_ref_dir:
-            sys.exit(f"ERROR: --static-ref-dir is required for {wanted_static}")
+            sys.exit("ERROR: --static-ref-dir is required for "
+                     f"{wanted_static + wanted_masks}")
         static_fields, static_meta = static_ref.load_static(static_ref_dir)
         # The one guard that stops a geo_em from another domain from silently
         # poisoning the archive: every field would still encode, on the right
@@ -385,9 +395,32 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
         rng = f"{finite.min():.4g}..{finite.max():.4g}" if finite.size else "all-missing"
         print(f"  {key:10s} -> {WRF_TO_ECMWF_PARAMID[key]['shortName']:7s} {rng} {note}")
 
-    # ---------------- land / ocean mask -------------------------------------
-    landmask = gv("LANDMASK").values
-    ocean = (landmask == 0)
+    # ---------------- the three masks ---------------------------------------
+    # One rule, settled with the user on 2026-09-25 across issues #34, #36 and
+    # #38: A POINT IS MASKED WHERE THE ERA5 PARAMETER IS NOT DEFINED THERE.
+    # Not where the model has nothing to say, and not where the number looks
+    # wrong -- where the parameter itself has no meaning.
+    #
+    #   sst, ci   -> the sea. Masked off land AND off inland water, because
+    #               ERA5 has no sea-surface temperature on a lake. Ours used to
+    #               publish one, down to 252.3 K -- below the freezing point of
+    #               seawater, on water that is not sea (#36).
+    #   swvl, stl -> permanent land. NOT the hourly landmask: WRF makes a water
+    #               cell land when sea ice forms and fills it with water, and
+    #               those columns went out under ERA5's soil paramIds reading
+    #               swvl = 1.000 against their own soil type's porosity of
+    #               0.435 (#38). ERA5's land-sea mask does not move, so there
+    #               is no soil there to publish.
+    #
+    # `lsm` itself still follows the model, hour by hour, because that IS what
+    # the model integrated and it is published as such.
+    landmask = gv("LANDMASK").values          # the model's own, moves with sea ice
+    if static_fields:
+        sea = static_fields['ocean_mask'] > 0.5
+        land_permanent = static_fields['land_mask'] > 0.5
+    else:                                      # a --debug-vars run needing neither
+        sea = (landmask == 0)
+        land_permanent = (landmask != 0)
 
     # ---------------- 00Z reference for accumulated fields ------------------
     # Loaded outside any try/except: a missing reference must abort the run
@@ -488,8 +521,13 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
 
             if key == 'VAR_SSO':
                 values = np.sqrt(values)          # variance -> standard deviation
-            elif key == 'SST':
-                values = np.where(ocean, values, np.nan)
+            elif key in ('SST', 'SEAICE'):
+                # Both on the sea mask, and both as a BITMAP. ci used to go out
+                # as zeros over land while sst on the same mask carried a
+                # bitmap, so a user could not tell ice-free sea from not-sea --
+                # and lsm cannot settle it, because lsm moves with the ice
+                # (#34). ERA5 masks the two identically.
+                values = np.where(sea, values, np.nan)
             values = values * UNIT_SCALE.get(key, 1.0)
             emit(key, values)
         except Exception as exc:                  # noqa: BLE001 - reported below
@@ -721,10 +759,14 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
                     if not want(key):
                         continue
                     lo, hi = ERA5_SOIL_LAYERS[i]
-                    # RUC integrates no soil column over water. The mask MOVES with
-                    # the sea-ice reclassification, so it is the wrfout's own
-                    # landmask, never the static one.
-                    emit(key, np.where(ocean, np.nan, layers[i]),
+                    # RUC integrates no soil column over water, and the columns
+                    # it grows under sea ice are not soil: swvl reaches exactly
+                    # 1.000 there against soil type 16's porosity of 0.435. So
+                    # the mask is geo_em's PERMANENT land, not the wrfout's own
+                    # moving one (#38). This discards values the model really
+                    # held; ci stays published, so nothing is lost that cannot
+                    # be recovered.
+                    emit(key, np.where(land_permanent, layers[i], np.nan),
                          f"({100 * lo:.0f}-{100 * hi:.0f} cm layer average)")
         except Exception as exc:
             print(f"  soil layers: FAILED: {exc}")

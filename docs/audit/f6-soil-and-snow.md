@@ -243,3 +243,34 @@ exact.
 - **Family 7's result is used, not re-measured**: that the hourly mask moves
   exactly with the sea ice is verified there, and this family only had to check
   that the soil bitmap follows it, which it does.
+
+## Repaired: the soil columns take geo_em's permanent land mask
+
+Applied 2026-09-25, option 1 of [#38](https://github.com/meteocima/CHAPTER/issues/38),
+decided with the user together with [#36](https://github.com/meteocima/CHAPTER/issues/36)
+as that issue asked. One rule for the whole archive: *a point is masked where
+the ERA5 parameter is not defined there*, and ERA5 has no soil under sea ice
+because its land-sea mask does not move.
+
+Verified on 2024-03-20T12, the sea-ice date, 2469 ice cells:
+
+| | before | after |
+|---|---|---|
+| `swvl1` present on sea-ice cells | all of them | **0** |
+| `swvl1` maximum anywhere | exactly **1.000** | **0.4693** |
+| present exactly on geo_em's permanent land | — | **True** |
+| `stl1` and `swvl4` masked the same way | — | **True** / **True** |
+
+0.4693 is below every RUC porosity (the highest is 0.485), so the impossible
+value is gone rather than merely hidden. The 532 remaining cells of soil type 16
+are land ice — glaciers — not sea ice, and they keep their columns.
+
+This knowingly discards values the model really integrated. It is the right
+trade because 1.000 m³/m³ against the 0.435 porosity the same file declares is
+an artefact of the hourly reclassification and not a measurement, and because
+`ci` stays published, so "there is ice here" is not lost.
+
+`lsm` is unaffected and still follows the model hour by hour — measured on the
+same file, it differs from the permanent land mask on exactly the 2469 sea-ice
+cells. That is the point: the archive says where the model put ice, and does not
+pretend there is soil beneath it.
