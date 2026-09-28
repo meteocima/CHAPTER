@@ -15,6 +15,13 @@ exactly the ERA5 one, it is said so below rather than hidden; where it could not
 to correspond at all, the field was dropped instead of published under a name that would
 mislead (see §6).
 
+This document says what is in the files. Two companions say the rest:
+[`MISSING_VARIABLES.md`](MISSING_VARIABLES.md) says what is not and why, and
+[`CHAPTER_KNOWN_PROPERTIES.md`](CHAPTER_KNOWN_PROPERTIES.md) states the **known properties and
+biases** of what is — the places where the archive is correct and surprising, each with the
+measured number. Read the third one before comparing this archive against ERA5 or against
+observations.
+
 ## 1. What the files are
 
 | | |

@@ -15,6 +15,11 @@ that fields which exist in the file but are identically zero are not mistaken fo
 Accumulated fields were additionally checked for monotonicity within a run, and every ECMWF
 parameter identifier was round-tripped through the GRIB encoder to confirm name and units.
 
+Companion documents: [`CHAPTER_VARIABLES.md`](CHAPTER_VARIABLES.md) is the reference for what the
+archive does contain, and [`CHAPTER_KNOWN_PROPERTIES.md`](CHAPTER_KNOWN_PROPERTIES.md) collects the
+measured properties and biases of the variables we *do* provide — including the numbers behind
+several of the caveats in §5 below.
+
 ---
 
 ## 1. Summary

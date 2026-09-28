@@ -247,6 +247,14 @@ every variable with its paramId, units and derivation, the time convention, the 
 approximations, the masked fields, and what is deliberately absent. Do not restate that list
 here — this section is a map, not a copy.
 
+[**CHAPTER_KNOWN_PROPERTIES.md**](CHAPTER_KNOWN_PROPERTIES.md) is its counterpart for everything
+that is correct and surprising: the aerosol-free shortwave bias, the cloud-cover deficit, the
+cold land skin, what `r` and `2r` each saturate against, the below-ground clamp, what `10fg`
+actually is, the masking rule, and the conventions that do not mean what they look like — each
+with the measured number and a link to the audit that produced it. It is the output of the
+September 2026 variable audit and it is addressed to whoever uses the data, not to whoever
+maintains this repository.
+
 ### Pressure levels (13 levels, 1000-50 hPa) — 13 variables, 169 messages
 `t`, `q`, `r`, `z`, `u`, `v`, `w` (Pa/s) and `wz` (m/s), plus the hydrometeor and cloud fields
 `cc`, `clwc`, `ciwc`, `crwc`, `cswc`.
