@@ -337,7 +337,17 @@ points. Measured in [#39](https://github.com/meteocima/CHAPTER/issues/39).
 
 ## 5. Wind
 
-### 5.1 `10fg` is the resolved 10 m wind, not a gust parameterisation
+### 5.1 `10fg` is the strongest wind the model actually simulated, not an estimate of the gusts above it
+
+**What ERA5 does.** A 31 km model cannot see a gust: the peak happens on scales of metres and
+seconds it never represents. ERA5 therefore *estimates* it — the mean 10 m wind, plus a term
+standing in for the turbulence the model has smoothed away, sized from the surface friction,
+plus an allowance for convective downdraughts. It is a calculated estimate of something the
+model does not resolve.
+
+**What CHAPTER does.** Nothing of the kind. This field is simply the highest 10 m wind speed
+the simulation itself produced during the hour. No turbulence term, no estimate — the model's
+own wind, at its own resolution, at its strongest moment of the hour.
 
 | comparison | ratio | corr |
 |---|---|---|
@@ -345,28 +355,44 @@ points. Measured in [#39](https://github.com/meteocima/CHAPTER/issues/39).
 | ours vs ERA5 `i10fg` (gust scheme, instantaneous) | **0.644** | 0.820 |
 | ours vs **our own instantaneous 10 m wind, same file** | **1.004–1.032** | — |
 
-The last row settles what the field is. `10fg` exceeds the instantaneous 10 m wind speed of the
-same file by **0.5 to 3.2 %** in the mean, and is below it at zero points out of 2 220 273 —
-the consistency check an hourly maximum must pass, and it passes. So the "maximum" adds almost
-nothing: published under paramId 49, this field is **the 10 m wind speed with a two-per-cent
-premium**, where ERA5's is a parameterised gust roughly 1.6 times the mean wind. WRF has no gust
-scheme here; this is the best proxy the run can give.
+The last row explains the first two. Taking the maximum over an hour raises the value by **half
+a per cent to three per cent** and no more — and it is below the instantaneous wind at zero
+points out of 2 220 273, which is the consistency check an hourly maximum must pass. So what is
+published under paramId 49 is, in practice, the 10 m wind speed. ERA5's gust runs at roughly
+1.6 times its own mean wind.
 
 The offset is a definition, not weather: 0.593 to 0.673 across all 34 sample timesteps, both
 years, every month, every hour.
 
-**What to do.** A user reading `10fg` as a 10 m wind gust — which is what paramId 49 means
-everywhere else — **under-predicts by 38 %**. The correlation of 0.81 means it ranks windy
-places correctly; the ratio of 0.625 means it will not give you a gust threshold. For wind
-risk, insurance, infrastructure or training against station gust observations, treat it as a
-different quantity rather than a biased one. Measured in
+**"But CHAPTER is a downscaling of ERA5 — shouldn't the two agree?"** It is a reasonable
+expectation, and it does not hold, for a specific reason: **a downscaling inherits the *flow*,
+not the *diagnostics*.** ERA5 supplies the boundary conditions — wind, temperature, humidity,
+pressure — and those are carried into the simulation. A gust is not among them. It is an output
+of the IFS's own boundary-layer post-processing, recomputed and discarded at every step, and it
+never enters the nested model. WRF then rebuilds everything from its own physics, and this run
+did not write out a gust diagnostic of its own. What is published here is the one gust-like
+field the run produced.
+
+There is a second half to this, and it pulls the other way. At 3 km, part of what ERA5 must
+parameterise is **resolved**: our friction velocity over land runs 1.6 to 2.1 times ERA5's
+(§2.2) precisely because the terrain-driven wind is computed rather than smoothed. So a 3 km
+model genuinely needs a *smaller* gust increment than a 31 km one — smaller, but not zero, and
+this archive applies zero.
+
+**What to do.** Reading `10fg` as a wind gust **under-predicts by about 38 %**, and no bias
+correction repairs that, because it is a different quantity rather than a mis-scaled one. The
+correlation of 0.81 means it ranks windy places and windy hours correctly, so it is usable for
+ranking, for patterns, and as a lower bound. It will not give you a gust threshold. Measured in
 [#50](https://github.com/meteocima/CHAPTER/issues/50).
 
 ### 5.2 And its declared one-hour window is right only 88 % of the time
 
-`10fg` is encoded as a one-hour maximum — `stepType = max`, `stepRange = 0-1`,
-`typeOfStatisticalProcessing = 2`, reference time H−1 — and that encoding was verified correct.
-**The field is not always a one-hour maximum.** WRF resets `WSPD10MAX` at the history write,
+**The length of the window is not the difference.** ERA5's hourly gust is also a maximum over
+the preceding hour, and our messages declare the same one: `stepType = max`, `stepRange = 0-1`,
+`typeOfStatisticalProcessing = 2`, reference time H−1. That encoding was verified correct. What
+the field does not always respect is its own label.
+
+**It is not always a one-hour maximum.** WRF resets `WSPD10MAX` at the history write,
 and measured over six whole days, 138 hourly transitions, **the reset was missed at 17 of them
 (12.3 %)**. Those hours carry a maximum over two hours or more under a message that declares
 one.
