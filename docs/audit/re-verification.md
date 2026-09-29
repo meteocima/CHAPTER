@@ -129,6 +129,26 @@ the gaps did.
 - **Family 8's `mucape` is untouched** — zero fraction 0.7693 before and after,
   same maximum, same mean where non-zero — as are `skt`, the stresses, the
   roughness and `msl`.
+
+> **Amended 2026-09-29: `skt` no longer belongs in that list.** It was a negative
+> control of this gate and it held — nothing the six repairs did moved it. But on
+> 2026-09-29 `EMISS_SNOWC_FULL` was changed from 0.01 to 0.015 (`1c3c6f2`,
+> [#55](https://github.com/meteocima/CHAPTER/issues/55)) after the snow threshold
+> was swept over all 34 timesteps, so the converter that ships is no longer the
+> one this gate measured, and `skt` **will** differ from the values recorded here
+> by about 0.05 K RMSE over snow-covered land.
+>
+> Nothing above is retracted: the gate proved what it proved about the six
+> repairs, on the code as it stood on 2026-09-25. What lapses is only the claim
+> that today's converter leaves `skt` where this run found it. The 476 GRIBs of
+> the 2026-09-28 trial tranche carry the old constant and are to be deleted
+> before the campaign regenerates them
+> ([#59](https://github.com/meteocima/CHAPTER/issues/59)).
+>
+> This amendment exists because the rule learned the same morning — a repair
+> silently invalidates the documents that describe the old behaviour — was broken
+> by the next commit of the same day. The measurement that justified the change is
+> in `docs/audit/f8-surface-exchange.md`.
 - **Family 6 changed 14 of 34 timesteps**, exactly the 14 the sea-ice census
   counted; the other 20 are identical.
 - **Family 7's July timestep** shows only the mask counts moving: no
