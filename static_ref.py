@@ -35,7 +35,13 @@ before trusting these statics for 2025.
 
 CLI:
     python static_ref.py extract <geo_em.d02.nc> <static_dir> \
-        [--check-wrfout <wrfout> ...]
+        [--check-wrfout <wrfout> [<wrfout> ...]]
+
+--check-wrfout takes one or more paths and may itself be repeated; the two
+forms are equivalent and every wrfout given is checked, each result landing in
+the sidecar meta as check_<n>. It used to take exactly one path per flag while
+this line read as though it took a list, which cost two SLURM jobs that died in
+seconds (issue #62).
 """
 
 import os
@@ -437,19 +443,40 @@ def check_against_wrfout(geo_em_path, wrfout_path):
         }
 
 
+def _parse_check_args(rest):
+    """Parse the --check-wrfout part of the command line.
+
+    Returns (paths, None) or ([], message). A flag takes every following
+    argument up to the next flag, so `--check-wrfout a b c` and the flag
+    repeated three times mean the same thing -- the docstring promised the
+    first form and the parser only accepted the second (#62).
+
+    Pure string logic, which is the one kind of thing a test settles here.
+    """
+    paths, i = [], 0
+    while i < len(rest):
+        if rest[i] != '--check-wrfout':
+            return [], (f"unexpected argument {rest[i]!r}: expected "
+                        f"--check-wrfout before a wrfout path")
+        i += 1
+        first = i
+        while i < len(rest) and not rest[i].startswith('--'):
+            paths.append(rest[i])
+            i += 1
+        if i == first:
+            return [], "--check-wrfout needs at least one wrfout path"
+    return paths, None
+
+
 def _cli(argv):
     if len(argv) < 3 or argv[0] != 'extract':
         print(__doc__)
         return 2
     geo_em, static_dir = argv[1], argv[2]
-    rest = argv[3:]
-    checks = []
-    while rest:
-        if rest[0] != '--check-wrfout' or len(rest) < 2:
-            print(f"unexpected argument {rest[0]!r}", file=sys.stderr)
-            return 2
-        checks.append(rest[1])
-        rest = rest[2:]
+    checks, err = _parse_check_args(argv[3:])
+    if err:
+        print(err, file=sys.stderr)
+        return 2
 
     fields, meta = derive_from_geo_em(geo_em)
     for i, wrfout in enumerate(checks):
