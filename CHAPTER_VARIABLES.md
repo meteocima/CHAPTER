@@ -70,12 +70,13 @@ Four fields are not exactly their ERA5 namesake, and are published with that sai
 
 | field | what ERA5 means | what we write |
 |---|---|---|
-| `slor` | slope of the **sub-grid** orography, a parameter of the form-drag scheme | the slope of the **resolved** 3 km terrain, `\|grad z\|` |
+| `slor` | slope of the **sub-grid** orography, a parameter of the form-drag scheme | the slope of the **resolved** 3 km terrain, `\|grad z\|`. Note eccodes will show you the parameter's own name, *Slope of sub-gridscale orography*, so nothing in the message itself says this. `sdor` beside it **is** the ERA5 quantity, only evaluated on a 3 km cell instead of a 31 km one: the measured ratio of medians is 0.244, which is (3/31)^0.605 — a resolution rescaling, not a different definition |
 | `10fg` | gust from a parameterisation (turbulent + convective) | the hourly maximum of the **resolved** 10 m wind |
 | `iews`, `inss` | the model's own stress components | the magnitude `rho u*^2`, projected on the 10 m wind direction |
+| `fsr` | an **effective** roughness, carrying the orographic drag the IFS parameterises at 31 km | WRF's **local** `ZNT`: the land-use roughness with a snow override. Over land it runs at **0.32–0.48 of ERA5's** in the median; over sea the two agree, both being Charnock. `zust` beside it is the model's own friction velocity and runs **1.6–2.1× ERA5's over land** (1.1× over sea) — the other half of the same story, because at 3 km the terrain-driven wind is resolved rather than smoothed |
 | `lsm` | a **permanent** land-sea mask; sea ice is carried separately in `ci` | WRF's `LANDMASK`, which reclassifies sea-ice points as land, so the mask **grows in winter**. `lsm & ~(ci > 0)` recovers the ERA5 sense exactly, and `ci` is published |
 
-The `lsm` row is the reason the soil mask in section 5 moves while `slt` does not: the soil columns follow the model's hourly mask, because that is the mask the model integrated on, whereas the static fields follow the permanent one.
+`lsm` is now the **only** field that follows the model hour by hour (with `al`, which moves with it). The soil columns used to as well, and no longer do: under new sea ice the scheme grows a column that is not soil — `swvl` reached exactly 1.000 against its own soil type's porosity of 0.435 — so since 2026-09-25 they are masked on the **permanent** land of the static file, as ERA5 does. Nothing is lost that cannot be recovered: `ci` is published.
 
 Three more deserve a note rather than a warning:
 
@@ -89,13 +90,47 @@ Three more deserve a note rather than a warning:
   0.0000 to four decimals), and the control is exact: over open water, where the model's
   skin temperature IS the sea surface temperature, it returns 0.98000.
 
-  The resulting field reproduces the model's own emissivity to 1e-4 on **98 % of points**,
-  and `skt` then agrees with the exact skin temperature to better than 0.01 K on 98.4–99.9 %
-  of them (RMSE 0.008–0.043 K). Over open water it recovers the sea surface temperature to
-  **0.0015 K**. Snow raises the emissivity to a flat 0.98 in every category, which is applied
-  from 1 % snow cover upwards — so the earlier statement that the emissivity under snow could
-  not be reconstructed no longer holds.
+  **The accuracy is seasonal, and both numbers matter.** The reconstruction reproduces the
+  model's own emissivity to 1e-4 on **99.98 % of land points in July and 93.05 % in January**,
+  for a land `skt` error of **0.0012 K RMSE in July against 0.115–0.133 K in January and
+  February** (p99 0.85 K, worst point 2.8 K). All of that spread is the snow rule: snow raises
+  the emissivity to a flat 0.98 in every category, applied from 1 % snow cover upwards, and the
+  model's own transition completes a little later than that. Over open water, where the answer
+  is known independently, it recovers the sea surface temperature to **0.0005 K RMSE** on about
+  910 000 points at every timestep of every season. Note this derivation error is thirty times
+  smaller than the physical cold bias of the land skin itself — which is the separate and
+  much larger fact: **`skt` over land runs about 1.6 K below ERA5, reaching 3.2 K at midday**,
+  while over sea it is exact (+0.01 K). That is the run, not the derivation; the sea number is
+  the control that proves it. Reconciling it against the extra shortwave and the missing cloud
+  above would need the surface energy budget, and `HFX`, `LH` and the ground heat flux are the
+  three fields this archive does not have.
 
+- **`al`** is a two-season table value, not a field. No monthly satellite albedo was used
+  (`usemonalb = .false.`), so the snow-free background comes from the land-use table's WINTER
+  and SUMMER columns by dominant category: it takes only **8 to 11 distinct values** over the
+  whole domain, and it changes at **1 171 937 land points — 89.9 % of the land mask — at the
+  seasonal boundary**, which is April and November, not a physical transition. Off land it is
+  0.08 on water and 0.65 on sea ice. Do not read it as an observed or evolving albedo, and do
+  not difference it across the boundary expecting a signal. `fal`, beside it, is the actual
+  ratio the simulation used and does evolve.
+- **The surface shortwave carries a systematic high bias.** RRTMG ran with an ozone
+  climatology and **no aerosol at all** (`aer_opt = 0`), while ERA5 carries the Tegen aerosol
+  climatology; over this domain an optical depth of 0.1 to 0.2 accounts for the size. Measured
+  against ERA5: **+8.5 % under clear sky** (`ssrdc`) and **+13.6 % all-sky** (`ssrd`). The
+  thermal fields are untouched by it and agree to within 1.1 %, which is the control that
+  makes the attribution credible. Total cloud cover also runs **22 % below** ERA5 and high
+  cloud **39 % below**, which pushes surface solar the same way. Both are properties of the
+  run and cannot be removed after the fact; they and the rest of the archive's measured
+  biases are stated in full in `CHAPTER_KNOWN_PROPERTIES.md`.
+- **Below the ground the pressure levels are clamped, not extrapolated.** Where a level lies
+  under the terrain, the archive repeats the **lowest model level's value verbatim** — matched
+  to exactly 0.0 for `t`, 1e-9 for `q`. That is a real model state from about 24 to 27 m above
+  the ground rather than synthetic air, and it keeps the surface join coherent. But **ERA5
+  extrapolates there with a lapse rate**, so the two archives differ in convention exactly
+  where 1000 hPa is underground, which is most of the land; and our `z` at 1000 hPa then sits a
+  median of 24 to 27 m *above* the terrain that `sp` puts it below, on **47.6 % of the domain**
+  at 1000 hPa and 9 % at 925. Mask the levels against `sp` if you need a clean comparison —
+  every field needed to do it is in the same file.
 - **`sst`** is constant within each 24 h run (`SST_UPDATE=0`), re-initialised daily.
 - **`dl`** is the lake depth database the run was built with, not a model state: lake
   physics was off (`sf_lake_physics=0`), so nothing in the simulation responds to it. It
@@ -109,10 +144,12 @@ Written with a GRIB bitmap rather than fake zeros, so missing means missing:
 
 | field | defined where |
 |---|---|
-| `sst`, `ci` | sea points only |
+| `sst`, `ci` | **sea** points only — and sea here is not simply "not land": WPS's land-use class calls the Black Sea, the Sea of Azov and part of the Baltic a *lake*, so masking on that class would have deleted `sst` from the Black Sea. The discriminator is connected-component size, measured: the water bodies of this domain are 844 431 cells (Atlantic + Mediterranean + Baltic + North Sea), 49 841 (Black Sea + Azov), 8 583 (Red Sea), then 1 225 (Vänern, the largest genuine lake) and smaller, so the cut sits in a gap with a factor of seven of slack |
+| `cl` | zero on the sea rather than missing, since a sea point genuinely has no lake cover |
+| `mucin` | the columns where the CAPE routine returns a value at all, i.e. where CAPE reaches 100 J/kg. **That is 4 % to 29 % of the domain**, least in winter. The gaps are written as missing rather than zero, because zero would read as "nothing inhibits convection" at precisely the columns where the most does |
 | `tsn` | cells whose snow cover exceeds 0.9 (≈ 29 mm water equivalent); out of season the field is legitimately empty |
 | `fal` | daytime only (incoming shortwave above 50 W/m²) |
-| `swvl1-4`, `stl1-4` | land points only, where the land-surface scheme integrates a soil column. **This mask moves**: the sea-ice reclassification turns about 2 500 sea points into land between seasons, so it follows the hourly `lsm`, not a fixed outline |
+| `swvl1-4`, `stl1-4` | the **permanent** land of the static file — a fixed outline, the same in every file of the archive. Sea ice therefore carries no soil column, which is what ERA5 does too |
 | `slt` | land points of the static file (1 304 109 cells) |
 | `tvl` | everywhere except the cells where a shrubland dominates the low vegetation (124 672 cells, 15.8 % of those with `cvl > 0`). MODIS carries no shrub phenology while ECMWF's table splits evergreen from deciduous shrubs, and rather than invent one the field is left missing. `cvl` still gives the cover there |
 | `dl` | lake cells only (88 785) |
@@ -127,8 +164,11 @@ Deliberately dropped rather than approximated:
 
 - **leaf area index** (`lai_lv`, `lai_hv`): the model carries a single LAI per cell, while
   ERA5 wants one per vegetation class, defined per unit of vegetated area. Any split between
-  the two would be our assumption, so neither field is written. The model's own LAI can be
-  delivered under its own name if it is wanted;
+  the two would be our assumption, so neither field is written. **The single field itself is
+  in the model output** — alive, and unpublished for that reason alone; it can be delivered
+  under its own name, `LAI`, if it is wanted. Note `rdlai2d = .false.`, so it is a table
+  lookup on the dominant category rather than an observation, which is a second reason not
+  to split it;
 - **sub-grid orography angle and anisotropy** (`anor`, `isor`): the static file carries the
   Kim-Arakawa asymmetry and effective-length parameters, which are not ECMWF's, and the
   difference does not fit in one line.

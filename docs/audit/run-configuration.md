@@ -655,9 +655,36 @@ independent information. It is a table value wearing a field's clothes.
 
 `README.namelist`: `usemonalb ! use monthly albedo map instead of table value`;
 `rdmaxalb = .true. ! use snow albedo from geogrid; false means using values from table`.
-So `ALBBCK` is the `MODI-RUC` `ALBEDO` column by dominant category — **no seasonal cycle from
-observation** — while `SNOALB` does come from geogrid. Bears directly on `al`, which the
-archive writes in every message.
+So there is **no seasonal cycle from observation**, while `SNOALB` does come from geogrid.
+
+**Corrected 2026-09-28 by [#37](https://github.com/meteocima/CHAPTER/issues/37): the table
+named here was the wrong one.** `ALBBCK` is not `VEGPARM.TBL`'s `MODI-RUC` `ALBEDO` column —
+that gives 0.18 for croplands, and **0.18 never occurs anywhere in the archive**. It is
+`LANDUSE.TBL`'s `MODIFIED_IGBP_MODIS_NOAH` section, which carries a WINTER and a SUMMER value
+per category, and **both occur**, on about half a million points each. Every transition in the
+archive is a row of that table with no residue:
+
+| winter → summer | points | row |
+|---|---|---|
+| 0.20 → 0.17 | 497 649 | 12 Croplands |
+| 0.23 → 0.25 | 369 219 | 16 Barren or Sparsely Vegetated |
+| 0.14 → 0.13 | 174 349 | 5 Mixed Forests |
+| 0.22 → 0.20 | 87 834 | 7 Open Shrublands |
+| 0.23 → 0.19 | 29 748 | 10 Grasslands |
+| 0.17 → 0.16 | 12 913 | 4 Deciduous Broadleaf Forest |
+| 0.70 → 0.55 | 174 | 15 Snow and Ice |
+| 0.15 → 0.14 | 51 | 3 Deciduous Needleleaf Forest |
+| unchanged | 132 172 | 1, 2, 6, 8, 9, 13, 18–20 |
+
+SUMMER applies April to October, WINTER November to March; the field does not move within a
+day. Off land it is 0.08 on water and **0.65 on sea ice**, WRF's `seaice_albedo_default` under
+`SEAICE_ALBEDO_OPT = 0`.
+
+"No seasonal cycle from observation" is literally true and reads as "no seasonal cycle", which
+is how the error reached `CLAUDE.md` — where `al` was recorded as moving only with the sea ice.
+It moves at **1 171 937 land points**, 89.9 % of the land mask, at the seasonal boundary. The
+parenthesis that seemed to prove invariance compared 2019-06 against 2024-07, **both summer
+files**. Bears directly on `al`, which the archive writes in every message.
 
 ### k. `output_diagnostics = 0` — no min/max screen-level fields, so no `mx2t`/`mn2t`
 
@@ -668,8 +695,8 @@ archive writes in every message.
 `README.namelist`: `output_diagnostics = 0 ! set to = 1 to add 36 surface diagnostic arrays
 (max/min/mean/std)`. There is no `T2MAX`/`T2MIN`, no `U10MAX`, no daily statistics of any
 screen-level field. **ERA5's `mx2t` and `mn2t` cannot be produced from these wrfout**, and
-this is a configuration fact, not a conversion limitation. It belongs in
-`MISSING_VARIABLES.md`, which does not currently carry it. (The hourly maxima of §e are a
+this is a configuration fact, not a conversion limitation. Recorded in
+`MISSING_VARIABLES.md` §4 on 2026-09-28 ([#30](https://github.com/meteocima/CHAPTER/issues/30)). (The hourly maxima of §e are a
 different, smaller set.)
 
 ### l. `p_top_requested = 5000` — the archive's top pressure level is the model lid

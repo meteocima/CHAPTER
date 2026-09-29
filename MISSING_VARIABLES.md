@@ -95,8 +95,10 @@ the lake recode is excluded). It brought `cvl`, `cvh`, `tvl`, `tvh`, `slt`, `cl`
 | **Sea-ice thickness, snow thickness on sea ice** | Not simulated. Sea ice enters only as a concentration boundary field | An external sea-ice product |
 | **Sea-ice albedo** as a prognostic ice property | Not simulated | Approximable radiatively (§3), but not as an ice-model variable |
 | **Snowmelt** | The field exists (`ACSNOM`) but is **not a monotone accumulator**: individual points drop back to zero within a single run (measured -7.26 mm against 00 UTC on 2024-07-01), so it cannot be referred to 00 UTC the way the other accumulations are. Published under the ERA5 name it would be wrong | Would need the melt diagnosed per timestep inside the model |
-| **Surface sensible and latent heat flux** | The instantaneous fields were not written out, and the accumulated ones are identically zero in every file we checked | Partially reconstructable from the surface energy budget, but the ground heat flux is also missing, leaving two unknowns in one equation. Best treated as unavailable |
-| **Skin temperature as a model variable** | `TSK` was not written out | We already provide `skt`, obtained by inverting the upward longwave flux (see §5) |
+| **Surface sensible and latent heat flux** | **The model computed them and the output stream does not carry them.** `isfflx = 1`, so they were produced at every timestep; they were simply not written to the history stream, and no untrimmed output exists anywhere. The accumulated `ACHFX`/`ACLHF` are identically zero because they are **Noah** accumulators in a RUC run, not because of a bucket setting | Only a re-run writing them. Reconstruction from the surface energy budget fails: the ground heat flux is missing too, leaving two unknowns in one equation |
+| **Skin temperature as a model variable** | `TSK` was not written out — a deliberate trimming of the output stream, not an accident | We already provide `skt`, obtained by inverting the upward longwave flux (see §5), which over water recovers the model's own SST to 0.0005 K |
+| **Maximum and minimum 2 m temperature** (`mx2t`, `mn2t`) | `output_diagnostics = 0`, so WRF never wrote `T2MAX`/`T2MIN`. An hourly sample of `T2` is **not** the model's within-hour extremum, so no work on the converter produces these | Only a re-run with `output_diagnostics = 1`. Note `nwp_diagnostics = 1` **is** on, which is what gives `WSPD10MAX` and six other per-hour maxima — the run carries within-hour extrema, just not for temperature |
+| **Planetary boundary layer height** (`blh`) | YSU **does** diagnose one; it was not written to the history stream. The limit is the output, not the scheme | A re-run writing `PBLH`, or the bulk Richardson diagnostic of §3, which is the same class of diagnostic the model itself applies |
 
 ---
 
@@ -150,9 +152,16 @@ These matter for correct use and should be read together with the variable list.
   energy). If you would rather have them flagged as missing, say so now.
 - **CAPE and CIN are most-unstable**, computed from the 500 m deep parcel with the highest
   equivalent potential temperature in the lowest 3 km — not surface-based.
-- **The gust field is not a gust parameterisation.** It is the maximum of the *resolved* 10 m wind
-  speed over the output hour. It behaves like a gust and is the best proxy available, but it is not
-  produced by a gust scheme.
+- **The gust field is not a gust parameterisation, and the distance is large enough to state.**
+  It is the maximum of the *resolved* 10 m wind speed over the output hour — the best proxy the
+  run can give, but ERA5's `10fg` is a parameterised gust, roughly 1.6 times its own mean wind.
+  Measured over the audit sample: ours is **0.625 of ERA5's `10fg`** and 0.644 of its
+  instantaneous `i10fg`, with a correlation of 0.81, while against **our own** instantaneous 10 m
+  wind in the same file it sits at **1.004 to 1.032** — so the hourly maximum adds half a per cent
+  to three per cent and nothing more. Reading it as a gust under-predicts by about 38 %, and that
+  is a difference of quantity, not a bias to correct. Its declared one-hour window is also right
+  only 88 % of the time. Both are stated in full, with the numbers, in
+  `CHAPTER_KNOWN_PROPERTIES.md` §5.
 - **The land/sea mask changes with the season.** Where sea ice forms, the model reclassifies the
   point as ice: the land mask, the vegetation and soil types and the background albedo all change
   there (2469 points on 20 March 2024, exactly the sea-ice points). These fields are therefore
@@ -168,12 +177,24 @@ These matter for correct use and should be read together with the variable list.
   initialised with; `fal` is the actual ratio of upward to downward shortwave, which is what the
   simulation really used — but it is undefined at night and is written as missing below
   50 W/m² of incoming shortwave.
-- **Total runoff is almost entirely surface runoff.** The sub-surface component is active on only
-  0.06 % of the points in July and 0.5 % in March, so `ro` and `sro` differ over a very small
-  fraction of the domain. Both are published because `ro` is the ERA5-canonical total.
-- **There is no graupel field**, although the microphysics produces graupel and it is not
-  negligible at 3 km (column integrals up to 27 kg/m²): ERA5 simply has no parameter for it. The
-  graupel is included in total column water, but cannot be published separately under an ERA5 name.
+- **Three runoff variables carry one field's worth of information.** The sub-surface component
+  is essentially empty at daily scale: measured over the audit sample, `ssro` is **identically
+  zero on five of the eighteen** sampled hours and, where it is not, non-zero at **at most 19
+  points of 2 220 273**, with a domain mean four to eight orders of magnitude below `sro`. So
+  **`ro` equals `sro` to four significant figures at every timestep** — the identity
+  `ro = sro + ssro` holds to 3.7e-9 m, there is simply nothing in the second term. The cause is
+  the time reference, not the conversion: the model's drainage counter is alive, but it barely
+  moves *within a day*, and `ssro` is accumulated since 00 UTC. Against ERA5 the partition is
+  the other way round (`sro` 1.0–4.6× ERA5, `ssro` 0.000–0.004×, `ro` 0.19–0.85×), so **do not
+  close a water budget assuming this archive carries a drainage term.** All three are published
+  because `ro` is the ERA5-canonical total; `ro` and `sro` are knowingly duplicate messages.
+- **There is no graupel field, and `tcw` carries it anyway.** ECMWF defines `tcw` as the sum of
+  five species — vapour, liquid, ice, rain, snow — and ours is the sum of **six**, graupel
+  included. ECMWF does define `260028 grle` and `260001 tcolg`, but ERA5 publishes neither, so
+  there is nowhere to put the graupel except inside `tcw`. **Reconstructing `tcw` from the five
+  published component columns therefore does not reproduce it**, and the difference is the
+  graupel: 0.4 % of the condensate in the domain mean, invisible — but **up to 26.5 kg/m² inside
+  a July convective cell**, which is more than the rest of the column's condensate put together.
 - **Rainfall excludes snow and graupel, not hail.** The microphysics has no hail category, so rain
   is total precipitation minus snow minus graupel.
 - **2 m dewpoint is now in kelvin.** The previous GRIB1 archive wrote it in degrees Celsius under

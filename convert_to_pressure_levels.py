@@ -142,21 +142,30 @@ WRF_EMISS = np.array([
     0.930,   # 8  Woody Savannas
     0.920,   # 9  Savannas
     0.920,   # 10 Grasslands
-    0.950,   # 11 Permanent Wetlands       NOT MEASURED: absent from this domain
+    0.950,   # 11 Permanent Wetlands       not measurable here: absent from this domain
     0.935,   # 12 Croplands
     0.880,   # 13 Urban and Built-Up
-    0.920,   # 14 Cropland/Natural Mosaic  NOT MEASURED: absent from this domain
+    0.920,   # 14 Cropland/Natural Mosaic  not measurable here: absent from this domain
     0.980,   # 15 Snow and Ice
     0.850,   # 16 Barren or Sparsely Vegetated
     0.980,   # 17 Water
     0.930,   # 18 Wooded Tundra
-    0.920,   # 19 Mixed Tundra             NOT MEASURED: 0.004% of the domain
-    0.900,   # 20 Barren Tundra            NOT MEASURED: absent from this domain
+    0.920,   # 19 Mixed Tundra             not measurable here: 0.004% of the domain
+    0.900,   # 20 Barren Tundra            not measurable here: absent from this domain
     0.980,   # 21 Lake (recoded to water at run time, sf_lake_physics=0)
 ])
-# The five NOT MEASURED entries keep VEGPARM's EMISSMIN: they are the categories
-# that never occur, or occur too rarely to catch under cloud. Nothing in this
-# archive depends on them; they are here so the array is total.
+# Every value above is VEGPARM.TBL's MODI-RUC section, column LEMI -- the table
+# RUC actually reads, since sf_surface_physics=3. LANDUSE.TBL's MODIS section
+# carries the identical column (SFEM) digit for digit. The measurement confirmed
+# all 16 categories that occur here, and the four that disagree with Noah's
+# EMISSMIN (3, 5, 7, 12, and barren at 0.850 against 0.900) agree with MODI-RUC
+# exactly. Read MODI-RUC, never MODIFIED_IGBP_MODIS_NOAH: this run never opens
+# Noah's half of that file, and comparing against it is what produced the old
+# claim that RUC took these from no table at all (issue #28).
+#
+# The rows above marked "not measurable here" never occur, or occur too rarely
+# to catch under cloud, so the measurement has nothing to say about them -- but
+# they are MODI-RUC's values like the rest, cited rather than guessed.
 
 # Snow raises the emissivity to a flat 0.98 in every category -- a switch, not a
 # blend. Best rule found against the exact values: full 0.98 from 1% snow cover
@@ -287,6 +296,11 @@ def write_message(fout, values, info, level, grid, valid):
             codes_set(gid, 'level', int(level))
         if info.get('stepType') == 'accum':
             # Marker kept from the GRIB1 schema: accumulation referred to 00Z.
+            # It discriminates nothing INSIDE a grib_v3 file: 128 is eccodes'
+            # own GRIB2 sample default, so all 246 messages carry it whether or
+            # not this line runs. Its only meaning is against the GRIB1 tree,
+            # where 127 marks run-init-referred. A consumer wanting the
+            # accumulations tests stepType/stepRange (issue #53).
             codes_set(gid, 'generatingProcessIdentifier', accum_ref.ACCUM_FROM_00Z_GENPROC)
 
         flat = np.asarray(values, dtype=np.float64).ravel()
