@@ -21,7 +21,16 @@
 # Per timestep it:
 #   1. skips it if the output GRIB already exists (re-entrancy)
 #   2. fetches the wrfout via:
-#         ssh -xT <datamover> "sftp -i <key> <opts> <relay>:<remote> <local>/"
+#         ssh -nxT <datamover> "sftp -i <key> <opts> <relay>:<remote> <local>/"
+#
+# The -n matters and is not cosmetic: ssh reads stdin by default and forwards it
+# to the remote command, so a backgrounded fetch inherits fd 0 and DRAINS it.
+# The driver's own loop reads nothing from stdin and is immune, but a caller
+# that drives this from `while read ... done < <(...)` and backgrounds it loses
+# the loop's input: the loop ends after about FETCH_PARALLEL iterations AND
+# REPORTS SUCCESS. That cut a staging phase to 3 files of 21, twice, before the
+# caller was fixed -- and the caller is the wrong place for the defence, which
+# is why it lives here now (issue #32).
 #      wrapped in `timeout` (cuts tape-recall hangs) with a few retries
 #   3. checks the file is a readable NetCDF (catches tape stubs / truncation)
 #   3b. (convert mode, hour != 00) makes sure the day's 00Z reference sidecar exists
@@ -204,7 +213,7 @@ fetch_wrfout() {
     mkdir -p "$local_dir"
 
     if [ "${DRY_RUN}" = "1" ]; then
-        echo "  [DRY] ssh -xT ${DATAMOVER_HOST} \"$(fetch_cmd "$remote" "$local_dir")\""
+        echo "  [DRY] ssh -nxT ${DATAMOVER_HOST} \"$(fetch_cmd "$remote" "$local_dir")\""
         return 0
     fi
 
@@ -221,7 +230,7 @@ fetch_wrfout() {
         rc=1
         for attempt in $(seq 1 "$max_attempts"); do
             echo "  [${dt}] fetch attempt ${attempt}/${max_attempts} via datamover..."
-            if timeout "${FETCH_TIMEOUT}" ssh -xT "${DATAMOVER_HOST}" \
+            if timeout "${FETCH_TIMEOUT}" ssh -nxT "${DATAMOVER_HOST}" \
                  "$(fetch_cmd "$remote" "$local_dir")" 2>"$errf"; then
                 rc=0; break
             else

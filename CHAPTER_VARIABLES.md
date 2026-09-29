@@ -94,8 +94,11 @@ Three more deserve a note rather than a warning:
   model's own emissivity to 1e-4 on **99.98 % of land points in July and 93.05 % in January**,
   for a land `skt` error of **0.0012 K RMSE in July against 0.115–0.133 K in January and
   February** (p99 0.85 K, worst point 2.8 K). All of that spread is the snow rule: snow raises
-  the emissivity to a flat 0.98 in every category, applied from 1 % snow cover upwards, and the
-  model's own transition completes a little later than that. Over open water, where the answer
+  the emissivity to a flat 0.98 in every category, applied from 1.5 % snow cover upwards, with a
+  blend below it. That threshold is the only quantity in this derivation that was chosen rather
+  than read out of the run, so it was measured: swept over all 34 sample timesteps against the
+  emissivity the model actually used, 1.5 % is the minimum of the resulting skin-temperature
+  error. Over open water, where the answer
   is known independently, it recovers the sea surface temperature to **0.0005 K RMSE** on about
   910 000 points at every timestep of every season. Note this derivation error is thirty times
   smaller than the physical cold bias of the land skin itself — which is the separate and

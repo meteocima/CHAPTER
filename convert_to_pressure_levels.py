@@ -167,12 +167,34 @@ WRF_EMISS = np.array([
 # to catch under cloud, so the measurement has nothing to say about them -- but
 # they are MODI-RUC's values like the rest, cited rather than guessed.
 
-# Snow raises the emissivity to a flat 0.98 in every category -- a switch, not a
-# blend. Best rule found against the exact values: full 0.98 from 1% snow cover
-# up, a linear blend below it (97.96% of points reproduced to 1e-4, against
-# 97.78% for a 0.5% threshold and 95.32% for a pure blend on snow cover).
+# Snow raises the emissivity to a flat 0.98 in every category: flat above the
+# threshold, a linear blend on snow cover below it. This threshold is the ONE
+# free parameter in a reconstruction that is otherwise an identity -- RUC's own
+# rule lives in source we do not have -- so it was swept rather than chosen.
+#
+# Measured 2026-09-29 over all 34 timesteps of the audit sample, 00Z and 12Z,
+# every month of 2024 plus 2019 summer and 2025 winter, scoring each candidate
+# against the emissivity the model actually used (the clear-sky identity) and
+# converting the error into kelvin of skin temperature. Pooled over every point:
+#
+#     threshold   0.005    0.010    0.015    0.020    0.030    0.050
+#     skt RMSE   0.06222  0.05766  0.05384  0.05513  0.05864  0.06428   K
+#     eps to 1e-4 0.9641   0.9690   0.9728   0.9709   0.9664   0.9582
+#
+# 0.015 is the minimum on both metrics, 6.6% better in kelvin than the 0.01 this
+# archive used until now. Issue #55 proposed 0.02; measured, 0.02 is WORSE than
+# 0.015 on every heavily-snowed timestep, so the switch does fire early but by
+# half of what that issue estimated. A pure blend with no switch, and a switch
+# with no blend below it, both score worse -- the blend below threshold is what
+# buys the eps fraction (0.9690 against 0.9608 for a bare switch at 0.01).
+#
+# One honest limit: no single constant is right everywhere. January 2025 prefers
+# a threshold near 0.1 on both its hours, on 55 000 in-band points, and that is
+# a real regime and not noise. 0.015 wins on the pooled population, which is the
+# criterion that applies to one archive-wide constant.
+# Evidence: tools/audit/f8_snow_threshold.py, docs/audit/f8-surface-exchange.md.
 EMISS_SNOW = 0.980
-EMISS_SNOWC_FULL = 0.01
+EMISS_SNOWC_FULL = 0.015
 
 # Cloud bands, as fractions of surface pressure (ECMWF convention).
 CLOUD_BANDS = {'lcc': (1.00, 0.80), 'mcc': (0.80, 0.45), 'hcc': (0.45, 0.00)}
@@ -681,7 +703,8 @@ def main(input_file, output_file, debug_vars=None, accum_ref_dir=None,
             # temperature error falls from 0.277 K RMSE to 0.032 K. It stays
             # exact where the answer is known independently: over open water the
             # model's skin temperature IS the SST, and this recovers it to
-            # 0.0015 K on every file tested.
+            # 0.0005 K RMSE on ~910 000 points at every timestep of every season
+            # (re-measured, #55; the 0.0015 K on file before was a summer number).
             lwupb, glw = gv("LWUPB").values, gv("GLW").values
             cat = np.clip(np.asarray(gv("IVGTYP").values, dtype=int), 0, len(WRF_EMISS) - 1)
             snowc = np.clip(np.asarray(gv("SNOWC").values, dtype=float), 0.0, 1.0)

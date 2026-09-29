@@ -304,3 +304,71 @@ explained.** [#57](https://github.com/meteocima/CHAPTER/issues/57).
   settle it are not in the archive.
 - **`mucape` against a matched parcel.** ERA5's parcel is not ours and cannot be
   made so from what is published; the comparison is reported as a bracket.
+
+## The snow emissivity threshold, swept rather than chosen (2026-09-29)
+
+`skt` is inverted from the upward longwave, and the inversion needs the emissivity the model
+used. Everything about that emissivity was *read out of the run* — the per-category table is
+`VEGPARM.TBL`'s `MODI-RUC` `LEMI` column, confirmed 21 of 21
+([#28](https://github.com/meteocima/CHAPTER/issues/28)) — with **one exception**: the snow
+cover at which the emissivity switches to a flat 0.98. RUC's own rule lives in source that is
+not on disk, so the converter carried a threshold inferred from a summer-weighted sample,
+`SNOWC >= 0.01`.
+
+[#55](https://github.com/meteocima/CHAPTER/issues/55) reported that the switch fires early and
+suggested 0.02. It also contained what looked like a contradiction — "current 0.940" against
+"a plain switch at any single threshold 0.76–0.93" — when the converter's rule *is* a switch.
+It is not a contradiction: the shipping rule is a switch **with a linear blend below the
+threshold**, and that is a different rule from a bare switch. The first sweep run here scored a
+bare switch and therefore measured something the archive does not do; it was rerun against both
+forms.
+
+### Method
+
+The clear-sky longwave diagnostic shares the all-sky equation's emissivity and skin temperature
+and differs only in the downward flux, so the two eliminate the temperature:
+`eps = 1 - (LWUPB - LWUPBC)/(LWDNB - LWDNBC)`. That is an identity and gives the truth wherever
+the two downward fluxes differ enough to divide by, i.e. under cloud. Each candidate rule is
+then scored against it two ways: the fraction of land points whose emissivity it reproduces to
+1e-4, and — the one that matters to a user — the resulting error in kelvin, obtained by
+inverting the same equation with the candidate's `eps` against the truth's.
+
+All **34 timesteps** of the audit sample, 00Z and 12Z, every month of 2024 plus 2019 summer and
+2025 winter. Script: `tools/audit/f8_snow_threshold.py`.
+
+### Result, pooled over every point of every timestep
+
+| threshold | 0.005 | **0.010** (was) | **0.015** | 0.020 (#55) | 0.030 | 0.050 |
+|---|---|---|---|---|---|---|
+| `skt` RMSE (K) | 0.06222 | 0.05766 | **0.05384** | 0.05513 | 0.05864 | 0.06428 |
+| eps to 1e-4 | 0.9641 | 0.9690 | **0.9728** | 0.9709 | 0.9664 | 0.9582 |
+
+**0.015 is the minimum on both metrics, 6.6 % better in kelvin than 0.01.** The switch does fire
+early, as #55 said, but by **half** of what that issue estimated: 0.02 is worse than 0.015 on
+every heavily-snowed timestep, and worse than 0.01 on some.
+
+The blend below the threshold earns its place: at the same threshold it buys nothing in kelvin
+(0.05766 either way at 0.01, because below 1 % cover it moves `eps` by at most ~0.001) but it
+lifts the emissivity fraction from 0.9608 to 0.9690.
+
+### Why the whole sample was needed
+
+The first sweep used three deep-snow days and two light ones, and the two light ones kept
+improving past 0.015 — so the optimum looked regime-dependent, and the months not yet tested
+(November, December, April: onset and melt, thin patchy snow) were exactly the regimes that
+might pull the other way.
+
+They did not. Counting the points the threshold actually governs — snow cover between 0.0005 and
+0.06 — **November and December hold the largest populations in the whole sample**, 109 094 and
+100 156, more than January, and both choose 0.015. Eight of the ten timesteps with the largest
+in-band populations choose it. The timesteps whose best threshold is 0.05 or 0.1 are almost all
+ones with a negligible in-band population: 2024-07-15T12 has **3** such points, 2024-09-15T12 has
+126. Their optimum is noise on a population that cannot matter.
+
+### The dissent, recorded
+
+**January 2025 prefers a threshold near 0.1 at both hours**, and it is not noise: 55 000 in-band
+points, and the error falls from 0.0970 to 0.0691 K at 00Z. So **no single constant is right
+everywhere**. 0.015 is the minimum over the pooled population, which is the criterion that
+applies to a single archive-wide constant, and the dissent is on the record for whoever revisits
+it.
