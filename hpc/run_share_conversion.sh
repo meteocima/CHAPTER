@@ -28,10 +28,22 @@ LOG_DIR="${W}/logs"
 SEQ_LOG="${LOG_DIR}/share_conv_sequence.log"
 SEQ_STOP="${LOG_DIR}/share_conv_sequence.stop"
 UV="${UV:-${HOME}/.local/bin/uv}"
-MAX_QUEUED=48
+# Queue gate and batch size. The gate is a BARRIER, not a sliding window: the driver
+# waits for zero queued conv_* before the next batch, so a batch costs the slowest of
+# its jobs. Measured on tranche 1 (408 h, gate 48): ~10.5 min per batch against ~6 min
+# for one conversion, i.e. 43% of the wall clock is the barrier. Doubling the batch
+# amortises it over twice the work; see #65 for removing the barrier instead.
+MAX_QUEUED="${MAX_QUEUED:-48}"
 DEAD_MINUTES=60
 POLL_SECONDS=300
 SANITY_ACCOUNT=aifpt_ailamit_0
+# true keeps the wrfout after a successful convert, which is what this script did while
+# the files were staged for a colleague. They were released on 2026-09-29, so the rebuild
+# runs with false and the phase frees its own input as it goes (issue #59).
+KEEP_WRFOUT="${KEEP_WRFOUT:-true}"
+case "$KEEP_WRFOUT" in true|false) ;; *)
+    echo "KEEP_WRFOUT must be true or false, got '${KEEP_WRFOUT}'" >&2; exit 2 ;;
+esac
 
 # chain-name  start_date  end_date  months-for-sanity  wrfout-subdir
 # The chain name is only an identifier for the per-phase ledger/driver/stop
@@ -41,7 +53,14 @@ PHASES=(
     "share2024    2024-06-18 2024-09-12 2024-06,2024-07,2024-08,2024-09 wrfout_share"
     "share2019    2019-06-17 2019-09-06 2019-06,2019-07,2019-08,2019-09 wrfout_share"
     "share2024mar 2024-03-18 2024-03-31 2024-03                         wrfout_2024fill"
+    "rebuild2024feb 2024-02-01 2024-02-17 2024-02                       wrfout_rebuild"
 )
+# rebuild2024feb is the February half of the 2026-09-28 trial tranche: its GRIBs were
+# written before EMISS_SNOWC_FULL changed (#55) and are deleted at launch, while its
+# wrfout are still on disk, so it reconverts with no relay. Last, because it is the
+# phase we can most afford to leave unfinished. The trial's other 68 hours
+# (2024-03-15T04..03-17T23) are not here: 2024-03-15 is missing 00-03Z locally and this
+# table cannot express a part-day, so asking for them would open the datamover.
 
 # ---- self-detach from a snapshot --------------------------------------------
 if [ -z "${SEQ_DETACHED:-}" ]; then
@@ -72,7 +91,7 @@ check_stop() {
 pipeline_args() {
     local y="$1" start="$2" end="$3" wdir="$4"
     echo "window.start_date=${start} window.start_hour=0 window.end_date=${end} window.end_hour=23" \
-         "paths.wrfout_dir=${W}/${wdir} pipeline.keep_wrfout=true" \
+         "paths.wrfout_dir=${W}/${wdir} pipeline.keep_wrfout=${KEEP_WRFOUT}" \
          "batch.size=${MAX_QUEUED} batch.max_queued_converts=${MAX_QUEUED}" \
          "paths.status_log=${LOG_DIR}/${y}_conv_status.log" \
          "paths.driver_log=${LOG_DIR}/${y}_conv_driver.log" \
