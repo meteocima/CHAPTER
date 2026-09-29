@@ -35,7 +35,7 @@ observations.
 | Parameter identity | **ECMWF paramId / shortName** throughout, so the archive is directly comparable with ERA5 |
 | File | one file per hour, **~747 MB** (~17.9 GB/day, ~6.6 TB/year) — measured, not estimated |
 | Naming | `ailam-an-cima-3km-{year}-{year}-1h-v1-{YYYYMMDD}{HH}.grib` |
-| Period | 2019, 2024 and 2025-01-01 → 2025-06-30, hourly (2020–2023 to follow) |
+| Period | 2019, 2024 and 2025-01-01 → **2025-07-02**, hourly (2020–2023 to follow). The 2025 end is where the WRF run itself stops: an `mmlsattr` scan of the whole of 2025 on the source (2026-09-29) finds one contiguous block of 4392 hours ending 2025-07-02T23 and nothing after it |
 
 ## 2. Vertical levels
 
