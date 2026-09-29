@@ -221,7 +221,8 @@ Over water, where the answer is known independently, the derivation is exact.
 
 **What to do.** Treat `skt` over water as the model's SST to a thousandth of a kelvin. Over
 land in winter, allow a tenth of a kelvin of derivation error on top of the physical bias of
-§1.3 — the two are unrelated and the derivation error is thirty times smaller. Measured in
+§1.3 — the two are unrelated and the derivation error (at most 0.119 K RMSE, in February) is more
+than ten times smaller. Measured in
 [#55](https://github.com/meteocima/CHAPTER/issues/55).
 
 ---
@@ -261,8 +262,8 @@ There is no clip. Supersaturation is physical, the model produces it, and ERA5 p
 regime, and **34 785 points above 100 %** at 400 hPa.
 
 Below ground, values reach further still — up to about 163 % — and that is the clamping of §4.1
-rather than the humidity: the lowest model level's moisture, from roughly 25 m above the
-terrain, read at a nominal pressure of 1000 hPa. See §4.1 before treating it as a moisture
+rather than the humidity: the lowest model level's moisture, from 24 to 27 m above the
+terrain (§4.1), read at a nominal pressure of 1000 hPa. See §4.1 before treating it as a moisture
 error.
 
 If your ingest pipeline rejects relative humidity above 100, it will reject valid data from
@@ -302,7 +303,7 @@ an invention. A user reading 1000 hPa over the Alps is reading near-surface air,
 defensible thing to publish than a synthetic lapse-rate extrapolation. It is also why the
 archive is coherent across the surface join: `2t − t(1000 hPa)` below ground is −0.9 K at
 midnight and +1.4 K at noon in July, which is a nocturnal inversion and a superadiabatic
-daytime surface layer over a 22 m interval.
+daytime surface layer over the ~22 m between the 2 m level and the lowest model level.
 
 **The bad half.** `z` then contradicts `sp`. Where the surface pressure says the 1000 hPa
 surface is underground, the published `z` at 1000 hPa puts it a median of **24 to 27 m above**
@@ -344,7 +345,8 @@ points. Measured in [#39](https://github.com/meteocima/CHAPTER/issues/39).
 **What ERA5 does.** A 31 km model cannot see a gust: the peak happens on scales of metres and
 seconds it never represents. ERA5 therefore *estimates* it — the mean 10 m wind, plus a term
 standing in for the turbulence the model has smoothed away, sized from the surface friction,
-plus an allowance for convective downdraughts. It is a calculated estimate of something the
+plus, in convective conditions, a term proportional to the wind shear between 850 and 950 hPa
+(IFS Cy41r2 Part IV, §3.10.4, eq. 3.99). It is a calculated estimate of something the
 model does not resolve.
 
 **What CHAPTER does.** Nothing of the kind. This field is simply the highest 10 m wind speed
@@ -584,8 +586,8 @@ from the land-use table's WINTER and SUMMER columns by dominant category. Conseq
 - it changes at **1 171 937 land points — 89.9 % of the land mask — at the winter/summer
   boundary**, and every transition is a table row with no residue (0.20→0.17 croplands on
   497 649 points, 0.23→0.25 barren on 369 219, and so on);
-- SUMMER applies April to October and WINTER November to March, and the field does not move
-  within a day;
+- SUMMER applies April to October and WINTER November to March, so on land the table part does
+  not move within a day; only the sea-ice points, which follow the hourly land mask, can;
 - off land it is 0.08 on water and **0.65 on sea ice**, the model's default ice albedo.
 
 **What to do.** Do not read `al` as an observed or evolving albedo, and do not difference it

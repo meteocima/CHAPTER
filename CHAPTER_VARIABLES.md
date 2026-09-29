@@ -33,7 +33,7 @@ observations.
 | GRIB edition | **GRIB2**, grid definition template **3.10** (Mercator), originating centre `ecmf` |
 | Packing | `grid_ccsds`, **24 bits per value**; masked fields carry a proper GRIB bitmap |
 | Parameter identity | **ECMWF paramId / shortName** throughout, so the archive is directly comparable with ERA5 |
-| File | one file per hour, **~747 MB** (~17.9 GB/day, ~6.6 TB/year) — measured, not estimated |
+| File | one file per hour, **~737-765 MB**: measured means of 737 MB over 184 files of September 2024 (661 MB at 00Z) and 765 MB over 476 files of February-March 2024. That is ~17.7-18.4 GB/day and **~6.5-6.7 TB/year** |
 | Naming | `ailam-an-cima-3km-{year}-{year}-1h-v1-{YYYYMMDD}{HH}.grib` |
 | Period | 2019, 2024 and 2025-01-01 → **2025-07-02**, hourly (2020–2023 to follow). The 2025 end is where the WRF run itself stops: an `mmlsattr` scan of the whole of 2025 on the source (2026-09-29) finds one contiguous block of 4392 hours ending 2025-07-02T23 and nothing after it |
 
@@ -61,12 +61,15 @@ or, for the radiation budget at the top of the atmosphere, `nominalTop`.
   parameterisation.
 - A file therefore mixes reference times on purpose. **Index on validity
   (`validityDate`/`validityTime`), never on `dataTime`.**
-- Accumulated messages carry `generatingProcessIdentifier = 128` as the marker of the 00 UTC
-  reference.
+- To tell a 00 UTC-referred accumulation from an instantaneous field, test `stepType` (or
+  `typeOfStatisticalProcessing`) and `stepRange`. **Do not use `generatingProcessIdentifier`**:
+  it is 128 in every one of the 246 messages, because 128 is eccodes' own GRIB2 default, so inside
+  this archive it discriminates nothing. It means something only against the old GRIB1 archive,
+  where 127 marked run-init-referred accumulations.
 
 ## 4. Declared approximations
 
-Four fields are not exactly their ERA5 namesake, and are published with that said:
+Six fields, in five rows, are not exactly their ERA5 namesake, and are published with that said:
 
 | field | what ERA5 means | what we write |
 |---|---|---|
@@ -78,7 +81,7 @@ Four fields are not exactly their ERA5 namesake, and are published with that sai
 
 `lsm` is now the **only** field that follows the model hour by hour (with `al`, which moves with it). The soil columns used to as well, and no longer do: under new sea ice the scheme grows a column that is not soil — `swvl` reached exactly 1.000 against its own soil type's porosity of 0.435 — so since 2026-09-25 they are masked on the **permanent** land of the static file, as ERA5 does. Nothing is lost that cannot be recovered: `ci` is published.
 
-Three more deserve a note rather than a warning:
+Six more deserve a note rather than a warning:
 
 - **`skt`** is not a model output here (`TSK` was not written): it is inverted from the
   upward longwave, `LWUPB = eps sigma T^4 + (1-eps) LWDN`. The emissivity is not assumed —
@@ -100,8 +103,8 @@ Three more deserve a note rather than a warning:
   emissivity the model actually used, 1.5 % is the minimum of the resulting skin-temperature
   error. Over open water, where the answer
   is known independently, it recovers the sea surface temperature to **0.0005 K RMSE** on about
-  910 000 points at every timestep of every season. Note this derivation error is thirty times
-  smaller than the physical cold bias of the land skin itself — which is the separate and
+  910 000 points at every timestep of every season. Note this derivation error, 0.119 K RMSE at its worst
+  (February), is more than ten times smaller than the physical cold bias of the land skin itself — which is the separate and
   much larger fact: **`skt` over land runs about 1.6 K below ERA5, reaching 3.2 K at midday**,
   while over sea it is exact (+0.01 K). That is the run, not the derivation; the sea number is
   the control that proves it. Reconciling it against the extra shortwave and the missing cloud
@@ -139,7 +142,7 @@ Three more deserve a note rather than a warning:
   physics was off (`sf_lake_physics=0`), so nothing in the simulation responds to it. It
   is published as the boundary dataset it is, and masked off-lake — the raw field is the
   10 m WPS default fill on 99.56 % of the domain, and 79 464 of the 88 785 lake cells
-  carry that same default (ERA5's own `dl` does the same where the database is silent).
+  carry that same default.
 
 ## 5. Masked fields
 
@@ -149,12 +152,12 @@ Written with a GRIB bitmap rather than fake zeros, so missing means missing:
 |---|---|
 | `sst`, `ci` | **sea** points only — and sea here is not simply "not land": WPS's land-use class calls the Black Sea, the Sea of Azov and part of the Baltic a *lake*, so masking on that class would have deleted `sst` from the Black Sea. The discriminator is connected-component size, measured: the water bodies of this domain are 844 431 cells (Atlantic + Mediterranean + Baltic + North Sea), 49 841 (Black Sea + Azov), 8 583 (Red Sea), then 1 225 (Vänern, the largest genuine lake) and smaller, so the cut sits in a gap with a factor of seven of slack |
 | `cl` | zero on the sea rather than missing, since a sea point genuinely has no lake cover |
-| `mucin` | the columns where the CAPE routine returns a value at all, i.e. where CAPE reaches 100 J/kg. **That is 4 % to 29 % of the domain**, least in winter. The gaps are written as missing rather than zero, because zero would read as "nothing inhibits convection" at precisely the columns where the most does |
+| `mucin` | the columns where the CAPE routine returns a value at all, i.e. where CAPE reaches 100 J/kg. **That is 3.8 % (January) to 28.8 % (July) of the domain**. The gaps are written as missing rather than zero, because zero would read as "nothing inhibits convection" at precisely the columns where the most does |
 | `tsn` | cells whose snow cover exceeds 0.9 (≈ 29 mm water equivalent); out of season the field is legitimately empty |
 | `fal` | daytime only (incoming shortwave above 50 W/m²) |
 | `swvl1-4`, `stl1-4` | the **permanent** land of the static file — a fixed outline, the same in every file of the archive. Sea ice therefore carries no soil column, which is what ERA5 does too |
 | `slt` | land points of the static file (1 304 109 cells) |
-| `tvl` | everywhere except the cells where a shrubland dominates the low vegetation (124 672 cells, 15.8 % of those with `cvl > 0`). MODIS carries no shrub phenology while ECMWF's table splits evergreen from deciduous shrubs, and rather than invent one the field is left missing. `cvl` still gives the cover there |
+| `tvl` | everywhere except the cells where a shrubland dominates the low vegetation (124 672 cells, 16.02 % of the 778 381 with `cvl > 0`). MODIS carries no shrub phenology while ECMWF's table splits evergreen from deciduous shrubs, and rather than invent one the field is left missing. `cvl` still gives the cover there |
 | `dl` | lake cells only (88 785) |
 
 ## 6. What is not in the archive
@@ -355,9 +358,10 @@ read, and the mapping cannot be checked.
 
 The source is the run's own static file `geo_em.d02` (MODIS-IGBP 21 classes, WPS
 `MMINLU=MODIFIED_IGBP_MODIS_NOAH`). Its land use was verified against the hourly output: it
-agrees with the model's dominant category on **100.00 %** of points once one expected
-difference is excluded — the model recodes lake to water at runtime, because lake physics was
-off. This is what makes `cl` recoverable at all.
+agrees with the model's dominant category on **100.00 %** of points (July 2019, January 2025)
+once one expected difference is excluded — the model recodes lake to water at runtime, because
+lake physics was off. With sea ice present the agreement is 99.98 % (2025-02-15 12Z), and every
+one of the 2735 differing points is a sea-ice point, reclassified by the model. This is what makes `cl` recoverable at all.
 
 ### `tvl` / `tvh`: MODIS-IGBP → ECMWF code table 4.234
 
@@ -384,7 +388,7 @@ Every translated row is a semantic identity: the ECMWF type names the same veget
 MODIS class. The two shrubland classes are the exception and are the reason `tvl` carries a
 mask. MODIS does not record whether a shrubland is evergreen or deciduous, while table 4.234
 has separate codes for the two (16 and 17). Choosing one would have been our invention over
-16.2 % of the vegetated cells, so the field is left missing there instead; `cvl` still reports
+16.02 % of the cells with low vegetation (124 672 of 778 381), so the field is left missing there instead; `cvl` still reports
 the cover. The classes that would have been the other ambiguous rows, 11 and 14, do not occur
 in this domain at all.
 
@@ -417,4 +421,5 @@ model's profile over it, and nothing is extrapolated at either end. In practice 
 fixed 4 × 6 matrix of weights, applied to the six model levels.
 
 `swvl` uses the total soil moisture (liquid plus ice), which is what the ERA5 name means; the
-liquid-only field is not used. Both sets are masked over water.
+liquid-only field is not used. Both sets are masked off the **permanent** land of the static file, so over water and over sea
+ice alike.

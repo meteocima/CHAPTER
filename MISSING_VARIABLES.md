@@ -1,12 +1,12 @@
 # CHAPTER 3 km — requested variables that are not directly available
 
-**Date:** 2026-09-17 · **Scope:** the variable list requested for the CHAPTER regional reanalysis
+**Date:** 2026-09-29 (first issued 2026-09-17) · **Scope:** the variable list requested for the CHAPTER regional reanalysis
 (atmosphere, static, land-surface, ocean waves, sea ice, surface ocean).
 
 This note answers one question: of the variables you asked for, which ones can we actually put in
 the GRIB archive, which ones we can obtain by some other route, and which ones are simply not in
 the data. It is meant to be read before we commit to a re-conversion of the whole archive, because
-that re-conversion costs several days of data transfer and has to be done only once.
+that re-conversion costs about eleven days of data transfer and has to be done only once.
 
 Everything below was verified against the actual files, not against documentation: model
 configuration read from the wrfout global attributes, and every field checked for real values on
@@ -30,7 +30,7 @@ several of the caveats in §5 below.
 | Atmosphere, pressure levels (9 variables × 13 levels) | **all delivered**, plus both vertical-velocity forms (`w` in Pa/s and `wz` in m/s) and three extra ERA5 fields: cloud fraction `cc`, rain `crwc` and snow `cswc` water content |
 | TKE at 3 height levels | **not available** — the model does not compute it |
 | Static: orography | **delivered** |
-| Static: land-use / land-cover | **dominant category only, never fractions** — the file that holds the fractions no longer exists (see §4) |
+| Static: land-use / land-cover | **delivered as fractions**: the static file `geo_em.d02` was recovered on 2026-09-18, and its fractional land use gives `cvl`, `cvh`, `tvl`, `tvh`, `slt`, `cl` and `dl` (see §3, §4) |
 | Land-surface | **delivered** as the subset that exists, with ERA5 names — now including the complete radiation budget, runoff, snow cover, snow temperature, albedo, surface stress and the high/low vegetation split |
 | Ocean waves (SWH, period, direction, wave-dependent Cd) | **not available** — no wave model |
 | Sea ice | **concentration delivered**; thickness, snow on ice, ice temperature and albedo not available |
@@ -67,8 +67,9 @@ them will be written to the GRIB files.
 
 ## 3. Variables we can obtain by another route
 
-These are not in the model output, but there is a defensible way to get them. None of them is
-implemented: each needs a decision first. Items that appeared here in previous versions have
+These are not in the model output, but there is a way to approximate them. None of them is
+implemented, and none would be published under an ERA5 name: each is our own diagnostic, not the
+model's. Items that appeared here in previous versions have
 moved: **surface albedo is now delivered** (`al`, the snow-free background, and `fal`, the
 actual all-sky ratio), and **fractional land cover is now delivered too** — the static file
 `geo_em.d02`, recorded here as irrecoverable, was obtained from LRZ on 2026-09-18 and is the
@@ -78,8 +79,8 @@ the lake recode is excluded). It brought `cvl`, `cvh`, `tvl`, `tvh`, `slt`, `cl`
 | variable | route | confidence | cost |
 |---|---|---|---|
 | Sea-ice surface temperature | Use the skin temperature we already derive, restricted to points where sea-ice concentration > 0 | **Medium.** It is a radiative skin temperature, consistent with the model's own longwave emission, but not a dedicated ice-surface temperature | Free |
-| Drag coefficient **without** wave effect | From the model's own roughness length: `Cd = (κ / ln(10/z0))²` | **Exact** — this is precisely the drag the simulation used (Charnock, no wave coupling) | Free |
-| Planetary boundary layer height | Bulk Richardson number on the virtual potential temperature profile; all required fields are present | **Reasonable** — the same class of diagnostic the model itself would apply | Free |
+| Drag coefficient **without** wave effect | From the model's own roughness length and stability: WRF's surface layer computes `Cd = (κ / ψ10)²` with `ψ10 = ln((10 + z0)/z0) − ψm(10 m)` (`module_sf_sfclayrev.F`, v4.1.1); `(κ / ln(10/z0))²` is only its neutral limit | **High** if the stability function is recomputed from the archived fields; the neutral formula alone is not the drag the simulation used | Free |
+| Planetary boundary layer height | Bulk Richardson number on the virtual potential temperature profile; all required fields are present | **Low as an ERA5 field** — it would be our diagnosis, not the model's: YSU's own `PBLH` was not written, so this fails the publication rule and is not delivered as `blh` | Free |
 
 ---
 
@@ -89,7 +90,7 @@ the lake recode is excluded). It brought `cvl`, `cvh`, `tvl`, `tvh`, `slt`, `cl`
 |---|---|---|
 | **`10efg`, `10nfg`** (eastward / northward gust components) | Only a gust *magnitude* proxy exists (see §5), and it is the maximum of the resolved wind, not a gust scheme. Their direction would have to be assumed equal to the mean wind, at an instant that does not even coincide with the maximum | Decomposing the magnitude along the 10 m wind is possible and cheap, but it was judged too weak to publish under ERA5 names, so **it was decided not to produce them** |
 | **TKE** (at any level) | The PBL scheme is YSU, which is non-local and carries no turbulent kinetic energy; the diffusion option does not produce one either. The field does not exist, at any height | Re-run WRF with a TKE-carrying PBL scheme (MYNN or MYJ). A similarity-theory estimate would need boundary-layer height *and* surface heat flux, both themselves missing, so the errors compound: it would look plausible but would not be consistent with the simulation |
-| **Significant wave height, mean wave period, wave direction** | No wave model was coupled to the atmosphere | A wave model run, or an external wave reanalysis (ERA5 waves at ~31 km) — which loses exactly the coastal detail that motivates a 3 km product |
+| **Significant wave height, mean wave period, wave direction** | No wave model was coupled to the atmosphere | A wave model run, or an external wave reanalysis (ERA5 waves at 0.36°, ~40 km) — which loses exactly the coastal detail that motivates a 3 km product |
 | **Drag coefficient including wave effect** | Same reason: the surface exchange used Charnock roughness with no sea state | As above. The wave-free drag coefficient *is* available (§3) |
 | **Sea surface height, ocean currents (u, v)** | The ocean is not simulated | An ocean reanalysis (e.g. CMEMS), regridded |
 | **Sea-ice thickness, snow thickness on sea ice** | Not simulated. Sea ice enters only as a concentration boundary field | An external sea-ice product |
@@ -98,7 +99,7 @@ the lake recode is excluded). It brought `cvl`, `cvh`, `tvl`, `tvh`, `slt`, `cl`
 | **Surface sensible and latent heat flux** | **The model computed them and the output stream does not carry them.** `isfflx = 1`, so they were produced at every timestep; they were simply not written to the history stream, and no untrimmed output exists anywhere. The accumulated `ACHFX`/`ACLHF` are identically zero because they are **Noah** accumulators in a RUC run, not because of a bucket setting | Only a re-run writing them. Reconstruction from the surface energy budget fails: the ground heat flux is missing too, leaving two unknowns in one equation |
 | **Skin temperature as a model variable** | `TSK` was not written out — a deliberate trimming of the output stream, not an accident | We already provide `skt`, obtained by inverting the upward longwave flux (see §5), which over water recovers the model's own SST to 0.0005 K |
 | **Maximum and minimum 2 m temperature** (`mx2t`, `mn2t`) | `output_diagnostics = 0`, so WRF never wrote `T2MAX`/`T2MIN`. An hourly sample of `T2` is **not** the model's within-hour extremum, so no work on the converter produces these | Only a re-run with `output_diagnostics = 1`. Note `nwp_diagnostics = 1` **is** on, which is what gives `WSPD10MAX` and six other per-hour maxima — the run carries within-hour extrema, just not for temperature |
-| **Planetary boundary layer height** (`blh`) | YSU **does** diagnose one; it was not written to the history stream. The limit is the output, not the scheme | A re-run writing `PBLH`, or the bulk Richardson diagnostic of §3, which is the same class of diagnostic the model itself applies |
+| **Planetary boundary layer height** (`blh`) | YSU **does** diagnose one; it was not written to the history stream. The limit is the output, not the scheme | Only a re-run writing `PBLH`. The bulk Richardson diagnostic of §3 would be ours, not the model's, so it is not published as `blh` |
 
 ---
 
@@ -134,22 +135,27 @@ These matter for correct use and should be read together with the variable list.
   temperature and does not update it. The field therefore has a daily, not hourly, time resolution.
 - **Skin temperature is derived, not modelled.** `TSK` was not written out, so it is obtained by
   inverting the upward longwave flux, `LWUPB = eps sigma T^4 + (1-eps) LWDN`, with the emissivity
-  of the dominant land-use category (VEGPARM.TBL, 0.88 urban to 0.98 water). It is exact where the
-  answer is known — over open water the model's skin temperature is the SST and the inversion
-  recovers it to 0.005 K — and it matches the 0 cm soil level to under 1 K RMSE on snow-free
-  land. Over snow the emissivity the scheme actually used cannot be reconstructed: about 0.8 K
-  of residual uncertainty there.
+  of the dominant land-use category (`VEGPARM.TBL`, `MODI-RUC` section, 0.85 barren to 0.98 water),
+  measured from the run itself. Over open water the model's skin temperature is the SST and the
+  inversion recovers it to 0.0005 K RMSE; on snow-free land it matches the 0 cm soil level to
+  0.026 K RMSE (one September timestep, 2024-09-04 16Z). Snow switches the emissivity to 0.98
+  above a snow-cover threshold, and that threshold is the one free parameter of the
+  reconstruction: land `skt` RMSE is 0.0012 K in July and 0.084-0.119 K in January and February.
+  The figures are in `CHAPTER_KNOWN_PROPERTIES.md` §2.
 - **The slope of orography is the resolved one.** ERA5's `slor` is a sub-grid parameter of the
   form-drag scheme; what we write is the slope of the resolved 3 km terrain. (`sdor` is instead a
   genuine sub-grid standard deviation, computed by the pre-processor.)
 - **Water contents are specific, not mixing ratios.** WRF carries mixing ratios, per kg of dry
   air; `clwc`, `ciwc`, `crwc`, `cswc` and the column integrals are converted to specific contents,
-  per kg of moist air, as their ECMWF definitions require (a 0.8 % correction in the median).
+  per kg of moist air, as their ECMWF definitions require. The correction is 0.011 % in the
+  median, 1.44 % at the 99th percentile and 2.26 % at most, measured on the full 3-D field; the
+  median is small because most of a column is dry upper troposphere.
 - **Convective inhibition is not defined everywhere.** By construction it is only computed where
-  CAPE exceeds 100 J/kg, and CAPE itself is undefined at the few percent of points with no
-  equilibrium level. We write **zero** at those points rather than a missing value, so that the
-  fields stay dense; zero is also the physically correct reading (no inhibition, no available
-  energy). If you would rather have them flagged as missing, say so now.
+  CAPE reaches 100 J/kg. `mucin` is **missing** (a GRIB bitmap) everywhere else: 94.3 % of the
+  domain on 2024-02-15 12Z, 71.2 % on 2024-07-15 12Z. Zero would be wrong there, because it
+  would read as "no inhibition" exactly where the inhibition is largest. `mucape` keeps a
+  **zero** where the routine returns nothing, which is the correct reading for CAPE: it is zero on
+  69 % of the domain in the February case and 46 % in the July one.
 - **CAPE and CIN are most-unstable**, computed from the 500 m deep parcel with the highest
   equivalent potential temperature in the lowest 3 km — not surface-based.
 - **The gust field is not a gust parameterisation, and the distance is large enough to state.**
@@ -164,8 +170,13 @@ These matter for correct use and should be read together with the variable list.
   `CHAPTER_KNOWN_PROPERTIES.md` §5.
 - **The land/sea mask changes with the season.** Where sea ice forms, the model reclassifies the
   point as ice: the land mask, the vegetation and soil types and the background albedo all change
-  there (2469 points on 20 March 2024, exactly the sea-ice points). These fields are therefore
-  written in every hourly file and must not be treated as a single static field for the archive.
+  there (2469 points on 20 March 2024, exactly the sea-ice points). The background albedo also
+  changes for a second reason: it is a two-season table value, and it moves on 89.9 % of the land
+  points at the boundary between the winter (November-March) and summer (April-October) tables.
+  `lsm` and `al` are therefore written in every hourly file and must not be treated as static.
+  `tvl`, `tvh` and `slt` do not move: they come from the static file, not from the hourly mask,
+  and the soil columns `swvl1-4`/`stl1-4` are masked on the permanent land, so sea ice carries no
+  soil column.
 - **Surface stress is a diagnostic, not a model output.** The eastward and northward stresses are
   reconstructed as density × friction velocity squared, aligned with the 10 m wind. The friction
   velocity is the model's own, so this is the same similarity theory the simulation used, but the
@@ -203,7 +214,7 @@ These matter for correct use and should be read together with the variable list.
   They are exactly zero at 00 UTC. In the GRIB files they carry a 0-to-H accumulation step with a
   00 UTC reference time, so the validity time is the timestep itself. The 10 m wind maximum is the
   exception: it covers the preceding hour only, because the model resets it at every output.
-- **Geolocation is now exact to ~2 m.** The grid declares the spherical earth of radius 6370 km
+- **Geolocation is now exact to 2 m** (2.009 m at most, measured). The grid declares the spherical earth of radius 6370 km
   that WRF actually integrates on. The previous GRIB1 files could not express this and were off by
   up to ~1.1 km at the northern edge of the domain.
 
@@ -231,5 +242,6 @@ other way round from what this document said last: the file **was** obtained fro
    be decided before the archive is re-converted.
 3. **Vertical levels.** We deliver 13 pressure levels. ERA5 uses 37, of which 29 would be within
    this model's domain (the model top is at 50 hPa, so nothing above it can be produced). Going to
-   29 levels would take the hourly file from ~0.8 GB to ~1.45 GB and a year of archive from 7.0 to
-   18.1 TB; on those grounds we kept 13. Say so now if the denser set matters for your use.
+   29 levels would take the hourly file from 0.74 GB (measured mean over September 2024) to
+   ~1.45 GB (a projection made on 2026-09-17), i.e. a year of archive from 6.5 TB to ~12.7 TB;
+   on those grounds we kept 13. Say so now if the denser set matters for your use.
