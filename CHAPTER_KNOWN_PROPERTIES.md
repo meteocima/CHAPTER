@@ -32,7 +32,9 @@ which:
 ## Which archive this describes
 
 The GRIB2 archive, `grib_v3`, **246 messages per hourly file**, as produced by the converter
-from 2026-09-25 onward. Files written before that date carry six defects that were repaired on
+from 2026-09-29 onward. (The six repairs below landed on 2026-09-25; one further change on
+2026-09-29 moved the snow-emissivity threshold, which shifts `skt` over snow-covered land by
+about 0.05 K RMSE and is already reflected in the figures in section 4.) Files written before that date carry six defects that were repaired on
 that date — relative humidity, specific humidity, the column integrals, snowfall, the water
 masks and convective inhibition. They are listed in the repository's audit record
 (`docs/audit/re-verification.md`) and are **not** properties of this archive. If you hold
@@ -211,7 +213,7 @@ reproduces the model's own state:
 |---|---|
 | water gate — `skt` against the model's own SST | **0.0005 K RMSE**, absmax 0.002 K, ~910 000 points, every timestep |
 | land points reproduced to 1e-4 | **99.98 % in July … 93.05 % in January** |
-| land `skt` RMSE from the emissivity table | **0.0012 K in July … 0.115–0.133 K in January and February**, p99 0.85 K, absmax 2.8 K |
+| land `skt` RMSE from the emissivity table | **0.0012 K in July … 0.084–0.119 K in January and February**, p99 0.81 K, absmax 2.79 K |
 
 The whole of the seasonal spread is the snow rule: emissivity switches to a flat 0.98 under
 snow, and the switch is applied slightly earlier than the model's own transition completes.

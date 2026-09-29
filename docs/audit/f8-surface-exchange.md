@@ -89,7 +89,29 @@ not what a `EMISSMIN + shdfac·(EMISSMAX−EMISSMIN)` blend would produce.
 |---|---|---|
 | water gate, skt vs SST | 0.0015 K | **0.0005 K RMSE, bias −0.0002 K, absmax 0.002 K**, on ~910 000 points, all six timesteps |
 | land, reproduced to 1e-4 | 97.96 % | **99.98 % in July, 93.05 % in January** |
-| land skt RMSE (table eps vs measured eps) | 0.032 K | **0.0012 K in July, 0.115–0.133 K in January and February**, p99 0.85 K, absmax 2.8 K |
+| land skt RMSE (table eps vs measured eps) | 0.032 K | **0.0012 K in July, 0.084–0.119 K in January and February**, p99 0.81 K, absmax 2.79 K |
+
+> **Re-measured 2026-09-29 at `EMISS_SNOWC_FULL = 0.015`.** The row above first read
+> 0.115–0.133 K / p99 0.85 / absmax 2.8, measured at 0.01, and the threshold sweep further
+> down this document changed the constant without anyone coming back to it. The full table
+> at 0.015, from `tools/audit/f8_surface.py --measure emissivity --measure skt`:
+>
+> | timestep | n (land, usable) | RMSE K | p99 K | absmax K | frac 1e-4 |
+> |---|---|---|---|---|---|
+> | 2024-01-15T12 | 717 054 | 0.1095 | 0.628 | 2.601 | 93.05 % |
+> | 2024-02-15T12 | 783 734 | 0.0840 | 0.490 | 2.793 | 95.51 % |
+> | 2024-03-15T12 | 696 139 | 0.0347 | 0.050 | 1.867 | 97.98 % |
+> | 2024-07-15T12 | 286 153 | **0.0012** | 0.001 | 0.321 | **99.98 %** |
+> | 2024-10-15T12 | 614 372 | 0.0146 | 0.001 | 1.795 | 99.63 % |
+> | 2025-02-15T12 | 657 688 | 0.1188 | 0.806 | 2.673 | 95.15 % |
+>
+> **The fractions did not move.** January reads 93.05 % at both 0.01 and 0.015, to four
+> figures. The threshold governs only the points whose snow cover falls between the two
+> values, so it changes how *wrong* the rule is where it is wrong, not how *often*. Quote the
+> RMSE for the improvement and the fraction for the coverage; they answer different questions.
+>
+> The water gate is unchanged and holds at every timestep: RMSE 0.00046–0.00052 K, absmax
+> 0.0017 K, on 908 010–916 164 open-water points.
 
 The recorded numbers were measured on a **summer** file. On that class of file
 the inversion is better than claimed; on the snowiest sampled day it is four

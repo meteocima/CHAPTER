@@ -92,8 +92,8 @@ Three more deserve a note rather than a warning:
 
   **The accuracy is seasonal, and both numbers matter.** The reconstruction reproduces the
   model's own emissivity to 1e-4 on **99.98 % of land points in July and 93.05 % in January**,
-  for a land `skt` error of **0.0012 K RMSE in July against 0.115–0.133 K in January and
-  February** (p99 0.85 K, worst point 2.8 K). All of that spread is the snow rule: snow raises
+  for a land `skt` error of **0.0012 K RMSE in July against 0.084–0.119 K in January and
+  February** (p99 0.81 K, worst point 2.79 K). All of that spread is the snow rule: snow raises
   the emissivity to a flat 0.98 in every category, applied from 1.5 % snow cover upwards, with a
   blend below it. That threshold is the only quantity in this derivation that was chosen rather
   than read out of the run, so it was measured: swept over all 34 sample timesteps against the
