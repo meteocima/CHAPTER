@@ -306,3 +306,36 @@ The ERA5 file is read **once per timestep and cached**, not re-walked per row. A
 pressure-level family otherwise asks 169 separate times for messages that all
 live in the same 21 MB file, and the re-walking cost more than the comparison
 did.
+
+## The report table, and the column that used to lie
+
+`harness.py report` is the surface every family reading meets first, and until
+2026-09-29 one of its columns was not a measurement. It printed the **mean of the
+per-row ratios**, so a single row whose ERA5 mean sat near zero sent its own ratio
+to infinity and carried the average with it: `crwc` read **756.2**, `cc` read
+**5.986**, and three of the eight families had to spend a paragraph telling the
+reader to ignore a number the instrument had printed
+([#43](https://github.com/meteocima/CHAPTER/issues/43)).
+
+Three changes, none of which touches a stored measurement — the rows always
+carried `ours_mean`, `era5_mean`, `bias`, `rmse`, `corr` per region and per level,
+and the families read those directly:
+
+- **The ratio is now pooled before dividing**, not averaged after. The check that
+  this is the right statistic: it returns `tcc` **0.7827**, against the **0.783**
+  family 3 computed by hand and published.
+- **It is suppressed where it cannot mean anything** — when ERA5's own mean sits
+  inside a fifth of its standard deviation, which is the exact condition for the
+  denominator being a near-cancellation. `crwc`, `v` and both 100 m wind
+  components print `--` instead of a number. Signed wind components are the honest
+  case: their mean is near zero by nature, so a ratio of means never described
+  them.
+- **`rmse/sd` is printed beside it**, defined whatever the mean does, so no row is
+  left without a normalised error.
+
+A fourth: a multi-level variable now shows its **worst level** next to the
+aggregate bias, ranked on the bias in the field's own units. Averaging 13 levels
+into one number hid the structure that mattered — `t` now reads
+`-0.2466 (worst 1000: -1.709)`, which is family 1's below-ground clamp surfacing
+by itself instead of in prose, and `cc` reads `(worst 300: -0.06003)`, which is
+family 3's high-cloud deficit.

@@ -1300,6 +1300,72 @@ def _fmt(value, digits=4):
     return str(value)
 
 
+# A ratio of means says nothing about a field whose mean sits inside its own
+# spread: the denominator is then a near-cancellation, and the quotient is
+# dominated by whatever survived it. Measured on the audit rows, the fields this
+# catches are the signed wind components and the rarest condensate species --
+# exactly the ones three family readings had to warn about (issue #43).
+RATIO_MIN_MEAN_OVER_STD = 0.2
+
+
+def _aggregate_leg_c(cs):
+    """Pool per-row leg C statistics into one honest set of numbers.
+
+    Averaging the per-row RATIOS is what the report used to do, and it is wrong
+    in a way that looks like a measurement: one row whose ERA5 mean is near zero
+    sends its own ratio to infinity and drags the average with it. `crwc` printed
+    756.2 and `cc` printed 5.986 that way. Pooling the means first and dividing
+    once gives `tcc` 0.7827 against the 0.783 family 3 published by hand, which
+    is the check that this is the statistic the readings actually used.
+
+    Returns (bias, ratio_or_None, nrmse, corr). `ratio` is None where the mean is
+    too small against the spread to carry meaning; `nrmse` (rmse over ERA5's own
+    standard deviation) is defined whatever the mean does, which is why it is
+    printed beside it rather than instead of it.
+    """
+    n = np.array([c['n'] for c in cs], dtype=float)
+    w = n / n.sum()
+    ours = float(np.sum(w * np.array([c['ours_mean'] for c in cs])))
+    era5 = float(np.sum(w * np.array([c['era5_mean'] for c in cs])))
+    bias = float(np.sum(w * np.array([c['bias'] for c in cs])))
+    rmse = float(np.sqrt(np.sum(w * np.array([c['rmse'] for c in cs]) ** 2)))
+    std = float(np.sqrt(np.sum(w * np.array([c['era5_std'] for c in cs]) ** 2)))
+    corrs = [c['corr'] for c in cs if c['corr'] is not None]
+    corr = float(np.mean(corrs)) if corrs else None
+    meaningful = std > 0 and abs(era5) >= RATIO_MIN_MEAN_OVER_STD * std
+    ratio = ours / era5 if meaningful and abs(era5) > 1e-30 else None
+    nrmse = rmse / std if std > 0 else None
+    return bias, ratio, nrmse, corr
+
+
+def _worst_level(group):
+    """The level that departs furthest from ERA5, for a multi-level variable.
+
+    One number averaged over 13 levels hides the structure that matters:
+    family 1's 1000 hPa temperature bias is -1.71 K against -0.05 K at 850 hPa,
+    and the mean of the two reads as agreement.
+
+    Ranked on the bias in the field's own units, not on bias over spread. The
+    normalised version is the better statistic and the worse display: printed
+    beside an aggregate bias in the same units, a "worst" that reads smaller
+    than the average invites the reader to distrust the column.
+    """
+    per = {}
+    for r in group:
+        c = r.get('leg_c', {}).get('regions', {}).get('all')
+        if not c or 'bias' not in c or r.get('level') is None:
+            continue
+        per.setdefault(r['level'], []).append(c)
+    if len(per) < 2:
+        return None
+    scored = [(abs(float(np.mean([c['bias'] for c in cs]))), level,
+               float(np.mean([c['bias'] for c in cs])))
+              for level, cs in per.items()]
+    scored.sort(reverse=True)
+    _, level, bias = scored[0]
+    return level, bias
+
+
 def cmd_report(args):
     rows = [json.loads(line) for line in Path(args.rows).read_text().splitlines()
             if line.strip()]
@@ -1310,8 +1376,8 @@ def cmd_report(args):
     for row in rows:
         by_var.setdefault(row['variable'], []).append(row)
 
-    print('| variable | paramId | unit | leg A | leg B | leg C bias | ratio | corr |')
-    print('|---|---|---|---|---|---|---|---|')
+    print('| variable | paramId | unit | leg A | leg B | leg C bias | ratio | rmse/sd | corr |')
+    print('|---|---|---|---|---|---|---|---|---|')
     for short in sorted(by_var):
         group = by_var[short]
         first = group[0]
@@ -1337,20 +1403,21 @@ def cmd_report(args):
             n_ours = len({k for c in cats for k in c['ours_classes']})
             n_era = len({k for c in cats for k in c['era5_classes']})
             c_cells = (f'{100 * agree:.1f}% same class',
-                       f'{n_ours} vs {n_era} classes', 'n/a (codes)')
+                       f'{n_ours} vs {n_era} classes', '--', 'n/a (codes)')
         elif cs:
-            bias = np.mean([c['bias'] for c in cs])
-            ratio = np.mean([c['ratio_means'] for c in cs
-                             if c['ratio_means'] is not None] or [np.nan])
-            corr = np.mean([c['corr'] for c in cs if c['corr'] is not None]
-                           or [np.nan])
-            c_cells = (_fmt(float(bias)), _fmt(float(ratio)), _fmt(float(corr)))
+            bias, ratio, nrmse, corr = _aggregate_leg_c(cs)
+            bias_cell = _fmt(bias)
+            worst = _worst_level(group)
+            if worst is not None:
+                bias_cell += f' (worst {worst[0]}: {_fmt(worst[1])})'
+            c_cells = (bias_cell, _fmt(ratio), _fmt(nrmse), _fmt(corr))
         else:
             why = next((r['leg_c'].get('why') for r in group
                         if not r['leg_c'].get('available')), 'not available')
-            c_cells = (why[:40], '--', '--')
+            c_cells = (why[:40], '--', '--', '--')
         print(f'| `{short}` | {first["paramId"]} | {first["leg_a"]["units_declared"]} '
-              f'| {leg_a} | {leg_b_cell} | {c_cells[0]} | {c_cells[1]} | {c_cells[2]} |')
+              f'| {leg_a} | {leg_b_cell} | {c_cells[0]} | {c_cells[1]} | {c_cells[2]} '
+              f'| {c_cells[3]} |')
 
     print()
     for short in sorted(by_var):
