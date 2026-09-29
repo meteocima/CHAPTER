@@ -158,7 +158,7 @@ Written with a GRIB bitmap rather than fake zeros, so missing means missing:
 | `swvl1-4`, `stl1-4` | the **permanent** land of the static file — a fixed outline, the same in every file of the archive. Sea ice therefore carries no soil column, which is what ERA5 does too |
 | `slt` | land points of the static file (1 304 109 cells) |
 | `tvl` | everywhere except the cells where a shrubland dominates the low vegetation (124 672 cells, 16.02 % of the 778 381 with `cvl > 0`). MODIS carries no shrub phenology while ECMWF's table splits evergreen from deciduous shrubs, and rather than invent one the field is left missing. `cvl` still gives the cover there |
-| `dl` | lake cells only (88 785) |
+| `dl` | cells with a lake cover above zero (32 000) |
 
 ## 6. What is not in the archive
 
