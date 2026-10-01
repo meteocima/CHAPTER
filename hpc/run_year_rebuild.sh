@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # Detached sequence that rebuilds the CHAPTER archive in GRIB2 (246 messages) for the
-# hours whose wrfout are NOT on local disk: 17 496 timesteps over 2019 (full year),
-# 2024 (full year) and 2025 (01-01..06-30). Each one is fetched from the LRZ relay,
+# hours whose wrfout are NOT on local disk: 17 068 timesteps over 2019 (full year),
+# 2024 (full year) and 2025 (01-01..07-02 -- the source stops on 07-02T23, measured). Each one is fetched from the LRZ relay,
 # converted, and its wrfout deleted as soon as the GRIB exists.
 #
 # Companion of hpc/run_share_conversion.sh, which converts the 4392 hours already
@@ -11,8 +11,17 @@
 # the conv_* queue gate. The PHASES below are the exact complement of what that script
 # covers, so nothing is fetched twice:
 #
-#   on disk (run_share_conversion): 2019-06-17..09-06, 2024-03-18..03-31, 2024-06-18..09-12
-#   here:                           everything else in 2019, 2024 and 2025-H1
+#   on disk (run_share_conversion): 2019-06-17..09-06, 2024-02-01..02-17, 2024-03-18..03-31,
+#                                   2024-06-18..09-12, plus 2024-03-15T04..03-17T23
+#   here:                           everything else in 2019, 2024 and 2025 up to 07-02
+#
+# Keep that complement exact. The download chain is re-entrant on the STAGED WRFOUT, not
+# on the GRIB (SKIP_RAW_EXISTS), so a phase that overlaps hours already converted and
+# whose wrfout are gone will fetch them again in full -- 9.14 GB each, over the relay.
+# Two phases were trimmed on 2026-10-01 for exactly that reason, after the 4800 hours of
+# 2026-09-29 landed: r24_02 lost 2024-02-01..17 and r24_03 now stops at 2024-03-15T03, because 03-15T04..03-17T23 are staged in
+# wrfout_rebuild while 03-15T00..03Z are not: those four hours are the only part of that
+# day the relay still has to supply, and trimming to 03-14T23 would have orphaned them.
 #
 # Why phases: a year of wrfout is ~80 TB against a 100 TB quota. The window is cut into
 # ~monthly phases and, as soon as a phase finishes downloading, its conversion starts IN
@@ -69,8 +78,8 @@ export KEEP_WRFOUT PHASES_ONLY
 PHASES=(
     "r19_09a 2019-09-07 0 2019-09-09 23"
     "r24_01  2024-01-01 0 2024-01-31 23"
-    "r24_02  2024-02-01 0 2024-02-29 23"
-    "r24_03  2024-03-01 0 2024-03-17 23"
+    "r24_02  2024-02-18 0 2024-02-29 23"
+    "r24_03  2024-03-01 0 2024-03-15 3"
     "r24_04  2024-04-01 0 2024-04-30 23"
     "r24_05  2024-05-01 0 2024-05-31 23"
     "r24_06  2024-06-01 0 2024-06-17 23"
@@ -94,6 +103,7 @@ PHASES=(
     "r25_04  2025-04-01 0 2025-04-30 23"
     "r25_05  2025-05-01 0 2025-05-31 23"
     "r25_06  2025-06-01 0 2025-06-30 23"
+    "r25_07  2025-07-01 0 2025-07-02 23"
 )
 
 # ---- self-detach from a snapshot --------------------------------------------
