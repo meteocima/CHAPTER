@@ -55,8 +55,8 @@
 #   CONVERT_PARTITION, CONVERT_WALLTIME, CONVERT_MEM, CONVERT_ACCOUNT
 #   DOWNLOAD_ONLY                  - "1" to fetch only: no convert submitted, wrfout kept
 #   KEEP_WRFOUT                    - "1" to convert but keep the wrfout (passed to convert_step.sh)
-#   MAX_QUEUED_CONVERTS            - >0: start a batch only once the user has no conv_* job
-#                                    queued, so at most BATCH_SIZE (<= this) are ever queued
+#   MAX_QUEUED_CONVERTS            - >0: cap on this user's queued conv_* jobs. A convert is
+#                                    submitted whenever fewer than this are queued (#65)
 #   DRY_RUN                       - "1" to print commands instead of running them
 
 set -euo pipefail
@@ -68,8 +68,8 @@ DRY_RUN="${DRY_RUN:-0}"
 DOWNLOAD_ONLY="${DOWNLOAD_ONLY:-0}"; export DOWNLOAD_ONLY
 # Convert but keep the input wrfout (e.g. converting files staged for someone else).
 KEEP_WRFOUT="${KEEP_WRFOUT:-0}"; export KEEP_WRFOUT
-# Queue gate: CINECA frowns on hundreds of queued jobs. With a value > 0 each batch
-# waits until no conv_* job of this user is left in the queue before submitting.
+# Queue gate: CINECA frowns on hundreds of queued jobs. With a value > 0 the driver keeps
+# at most this many conv_* jobs of this user queued, submitting as soon as there is room.
 MAX_QUEUED_CONVERTS="${MAX_QUEUED_CONVERTS:-0}"
 DIRECTION="${DIRECTION:-backward}"
 INIT_HOUR=$(printf "%02d" "$((10#${INIT_HOUR:-18}))")
@@ -460,9 +460,65 @@ queued_converts() {
 GATED=0
 if [ "${MAX_QUEUED_CONVERTS}" -gt 0 ] && [ "${DOWNLOAD_ONLY}" != "1" ] && [ "${DRY_RUN}" != "1" ]; then
     GATED=1
-    # A batch submits at most BATCH_SIZE converts into an empty queue.
-    [ "$BATCH_SIZE" -gt "$MAX_QUEUED_CONVERTS" ] && BATCH_SIZE="$MAX_QUEUED_CONVERTS"
 fi
+# BATCH_SIZE is no longer capped to MAX_QUEUED_CONVERTS. It used to be, because a batch
+# drained the queue to zero and then refilled it; now the two are independent -- the gate
+# bounds how many converts are IN the queue, BATCH_SIZE how many timesteps one driver
+# process handles before respawning.
+
+# --- convert gate (extracted by tests/test_convert_gate.py; keep the markers) ---
+# Sliding window, not a barrier (#65). The old gate waited for ZERO queued conv_* between
+# batches, so every batch cost as much as its slowest job: measured on the 2026-09-29
+# campaign, three quarters of a 96-job batch finished in four minutes and the last quarter
+# took another six. Admitting on "fewer than N queued" gives that tail back.
+#
+# squeue is NOT called once per timestep. Q_CACHED holds the last measured count and
+# Q_SINCE the dispatches made since it, so a fresh count is only fetched when the
+# optimistic estimate reaches the limit -- roughly one squeue per N submissions instead of
+# one per timestep, which matters when the wrfout are already local and a timestep costs a
+# second. The estimate only ever over-counts (jobs leave the queue, they do not join it on
+# their own), so it can delay a submission but never admit past the cap.
+Q_CACHED=0
+# Primed so the FIRST admission of every driver process asks slurm for real. A cold cache
+# of zero would admit N converts before looking, and the driver respawns every ~18 min --
+# so an already-full queue (a respawn, or the other campaign script running alongside)
+# would be overshot by up to N each time. Caught by tests/test_convert_gate.py.
+Q_SINCE="${MAX_QUEUED_CONVERTS}"
+
+# 0 = a convert may be submitted now, 1 = the caller must wait.
+gate_admit() {
+    [ "$GATED" = "1" ] || return 0
+    if [ $((Q_CACHED + Q_SINCE)) -lt "$MAX_QUEUED_CONVERTS" ]; then
+        Q_SINCE=$((Q_SINCE + 1))
+        return 0
+    fi
+    local nq
+    if ! nq=$(queued_converts); then
+        echo "  [queue] squeue failed; waiting rather than guessing."
+        return 1
+    fi
+    Q_CACHED="$nq"
+    Q_SINCE=0
+    if [ "$nq" -ge "$MAX_QUEUED_CONVERTS" ]; then
+        echo "  [queue] ${nq}/${MAX_QUEUED_CONVERTS} conv_* queued; waiting for room ($(date -u +%H:%M)Z)."
+        return 1
+    fi
+    Q_SINCE=1
+    return 0
+}
+
+# Block until there is room. 1 = a stop was requested while waiting.
+gate_wait() {
+    while ! gate_admit; do
+        if stop_requested; then
+            echo "STOP flag present (${STOP_FLAG}); stopping while waiting on the queue."
+            return 1
+        fi
+        sleep 60
+    done
+    return 0
+}
+# --- end convert gate ---
 
 processed=0
 running=0
@@ -472,24 +528,6 @@ while [ "$processed" -lt "$BATCH_SIZE" ] && within_window "$CUR_EPOCH"; do
         echo "Time budget (${DRIVER_MAX_SECONDS}s) reached; will respawn for the rest of the window."
         budget_hit=1
         break
-    fi
-
-    # Queue gate, once per batch: wait for the previous batch's converts to leave the
-    # queue. The budget check above still applies (CUR_EPOCH is not advanced).
-    if [ "$GATED" = "1" ] && [ "$processed" -eq 0 ]; then
-        if stop_requested; then
-            echo "STOP flag present (${STOP_FLAG}); stopping while waiting on the queue."
-            break
-        fi
-        if ! nq=$(queued_converts); then
-            echo "  [queue] squeue failed; waiting."
-            sleep 60; continue
-        fi
-        if [ "$nq" -gt 0 ]; then
-            echo "  [queue] ${nq} conv_* job(s) still queued; waiting before $(TZ=UTC date -d "@${CUR_EPOCH}" +%Y-%m-%dT%H) ($(date -u +%H:%M)Z)."
-            sleep 60; continue
-        fi
-        echo "  [queue] empty; submitting next batch of up to ${BATCH_SIZE}."
     fi
 
     d=$(TZ=UTC date -d "@${CUR_EPOCH}" +%Y-%m-%d)
@@ -513,8 +551,10 @@ while [ "$processed" -lt "$BATCH_SIZE" ] && within_window "$CUR_EPOCH"; do
     elif [ "${DOWNLOAD_ONLY}" != "1" ] && [ "$h" != "00" ] && ! ensure_ref "$d" "$h"; then
         echo "  WARN [${dt}] 00Z reference unavailable, skipping (REF_UNAVAILABLE)."
     elif [ "${DRY_RUN}" = "1" ] || [ "${FETCH_PARALLEL}" -le 1 ]; then
+        gate_wait || break
         process_one "$d" "$h" || true
     else
+        gate_wait || break
         process_one "$d" "$h" &
         running=$((running + 1))
         if [ "$running" -ge "$FETCH_PARALLEL" ]; then
