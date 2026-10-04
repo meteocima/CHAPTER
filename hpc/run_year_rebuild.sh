@@ -297,13 +297,23 @@ while :; do
 done
 log "QUEUE_EMPTY | all converts left the queue"
 
+# Phases whose report came back short. The sanity job below still runs -- knowing the
+# archive is clean is useful even when it is incomplete -- but the run must not end in DONE.
+INCOMPLETE=0
+
 for pend in "${CV_PENDING[@]}"; do
     read -r label sd sh ed eh off <<<"$pend"
     # shellcheck disable=SC2046
     cargs=( $(cv_args "$label" "$sd" "$sh" "$ed" "$eh") )
     rep="${LOG_DIR}/rebuild_${label}_report.txt"
-    "$UV" run python hpc/submit_step_pipeline.py "${cargs[@]}" report=true > "$rep" 2>&1
-    log "REPORT | ${label}: $(grep '^# summary' "$rep")"
+    # report=true exits non-zero when the window is not complete (#68). Before that,
+    # this loop logged "0 done, 72 pending" and the run still ended in DONE.
+    if "$UV" run python hpc/submit_step_pipeline.py "${cargs[@]}" report=true > "$rep" 2>&1; then
+        log "REPORT | ${label}: $(grep '^# summary' "$rep")"
+    else
+        log "PHASE_INCOMPLETE | ${label}: $(grep '^# summary' "$rep")  -- see ${rep}"
+        INCOMPLETE=$((INCOMPLETE + 1))
+    fi
 done
 for y in 2019 2024 2025; do
     log "GRIB_COUNT | ${y}: $(find "${W}/grib_v3/${y}" -name '*.grib' 2>/dev/null | wc -l)"
@@ -324,4 +334,9 @@ export LD_LIBRARY_PATH=\$GCC12_RT:\$ECCODES_LIB:\${LD_LIBRARY_PATH:-}
 ${UV} run python hpc/check_grib_sanity.py${month_args}")
 log "SANITY_SUBMITTED | job ${jid:-FAILED} -> ${LOG_DIR}/rebuild_sanity_${jid}.out"
 
+if [ "$INCOMPLETE" -gt 0 ]; then
+    log "INCOMPLETE | ${INCOMPLETE} phase(s) ended short; NOT reporting DONE. Re-run this"
+    log "INCOMPLETE | script (re-entrant) or the affected phase before starting another tranche."
+    exit 1
+fi
 log "DONE | all phases processed"

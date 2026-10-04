@@ -153,9 +153,17 @@ for ph in "${PHASES[@]}"; do
     log "QUEUE_EMPTY | ${y}: all converts left the queue"
 
     # 3. report + sanity
-    "$UV" run python hpc/submit_step_pipeline.py "${args[@]}" report=true \
-        > "${LOG_DIR}/${y}_conv_report.txt" 2>&1
-    log "REPORT | ${y}: $(grep '^# summary' "${LOG_DIR}/${y}_conv_report.txt")"
+    # report=true exits non-zero when the window is not complete (#68). Here the report
+    # runs BEFORE the next phase is launched, so stopping actually saves that work.
+    if "$UV" run python hpc/submit_step_pipeline.py "${args[@]}" report=true \
+            > "${LOG_DIR}/${y}_conv_report.txt" 2>&1; then
+        log "REPORT | ${y}: $(grep '^# summary' "${LOG_DIR}/${y}_conv_report.txt")"
+    else
+        log "PHASE_INCOMPLETE | ${y}: $(grep '^# summary' "${LOG_DIR}/${y}_conv_report.txt")"
+        log "PHASE_INCOMPLETE | ${y}: stopping before the next phase; re-run this script"
+        log "PHASE_INCOMPLETE | ${y}: (re-entrant) once the cause is understood."
+        exit 1
+    fi
     log "WRFOUT_COUNT | ${y}: $(find "${W}/${wdir}" -name "wrfout_d02_${start:0:4}-*" | wc -l) files left in ${wdir}"
 
     month_args=""

@@ -90,6 +90,10 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
     In download-only mode there is no GRIB, so the artefact is the staged wrfout --
     and it is checked by SIZE, not mere existence: with no convert downstream, that
     size gate is the only thing separating an intact delivery from a truncated one.
+
+    Returns (done, pending, recall). The caller needs the counts, not just the
+    printout: a sequence script used to re-read the summary line it had just been
+    handed, and then not act on it (#68).
     """
     start = datetime.strptime(start_dt, "%Y-%m-%dT%H")
     end = datetime.strptime(end_dt, "%Y-%m-%dT%H")
@@ -166,6 +170,7 @@ def do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
               f"not know: {counted}")
     if recall_list:
         print("# timesteps to recall on LRZ:\n " + " ".join(recall_list))
+    return done, missing, recall
 
 
 @hydra.main(config_path="../conf", config_name="pipeline", version_base=None)
@@ -198,10 +203,18 @@ def app(cfg: DictConfig):
     if datetime.strptime(start_dt, "%Y-%m-%dT%H") > datetime.strptime(end_dt, "%Y-%m-%dT%H"):
         raise ValueError(f"window start ({start_dt}) is after end ({end_dt})")
 
-    # Read-only consolidated report, no SLURM submission
+    # Read-only consolidated report, no SLURM submission. It exits non-zero when the
+    # window is not complete, so a caller can branch on the status instead of reading
+    # back the number this just printed: a sequence script logged "0 done, 72 pending"
+    # and then "all phases processed", and went on to spend another tranche (#68).
+    # Hours that are pending for a reason already on the ledger (RECALL) do not count:
+    # those are the source's problem and the operator has been told about them.
     if report:
-        do_report(start_dt, end_dt, direction, grib_dir, grib_template, status_log,
-                  download_only=download_only, wrfout_dir=wrfout_dir)
+        _done, pending, _recall = do_report(
+            start_dt, end_dt, direction, grib_dir, grib_template, status_log,
+            download_only=download_only, wrfout_dir=wrfout_dir)
+        if pending:
+            sys.exit(1)
         return
 
     # backward walks from the NEWEST edge; forward from the OLDEST edge
