@@ -101,8 +101,11 @@ datamover:
 batch:
   size: 24           # upper bound on timesteps per driver process (time budget usually cuts first)
   fetch_parallel: 2  # concurrent scp through the datamover (keep low: shared login node + datamover)
-  # Queue gate (0 = off). >0: each batch starts only when the user has no conv_* job
-  # queued, and batch.size is capped to it. E.g. size=48 + 48 = two days at a time.
+  # Queue gate (0 = off). >0: the cap on this user's queued conv_* jobs. The driver
+  # submits as soon as there is room, so the queue stays full instead of being drained
+  # between batches (#65). batch.size is NOT capped to it: the gate bounds how many
+  # converts sit in the queue, batch.size how many timesteps one driver process handles
+  # before respawning.
   max_queued_converts: 0
 
 # SLURM settings

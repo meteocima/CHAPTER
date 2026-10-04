@@ -498,21 +498,50 @@ gate_admit() {
         return 1
     fi
     Q_CACHED="$nq"
-    Q_SINCE=0
-    if [ "$nq" -ge "$MAX_QUEUED_CONVERTS" ]; then
-        echo "  [queue] ${nq}/${MAX_QUEUED_CONVERTS} conv_* queued; waiting for room ($(date -u +%H:%M)Z)."
+    # A dispatch already admitted may not have reached sbatch yet: with
+    # FETCH_PARALLEL > 1 the submit happens inside a backgrounded process_one, after
+    # a multi-minute sftp, so squeue cannot see it. Zeroing the estimate here forgot
+    # exactly those, and the cap was exceeded by up to FETCH_PARALLEL -- measured at
+    # 7 committed against a cap of 4 with a 3-deep lag. At most FETCH_PARALLEL can be
+    # in flight -- the main loop waits once that many are RUNNING, so when we are about
+    # to dispatch at most FETCH_PARALLEL-1 others are outstanding. Reserving that many
+    # is exact rather than merely safe: at FETCH_PARALLEL=1 process_one is synchronous,
+    # nothing is ever in flight, and the reserve is correctly zero.
+    local reserve=$(( ${FETCH_PARALLEL:-1} - 1 ))
+    [ "$reserve" -lt 0 ] && reserve=0
+    [ "$reserve" -ge "$MAX_QUEUED_CONVERTS" ] && reserve=$((MAX_QUEUED_CONVERTS - 1))
+    [ "$reserve" -lt 0 ] && reserve=0
+    Q_SINCE="$reserve"
+    if [ $((nq + reserve)) -ge "$MAX_QUEUED_CONVERTS" ]; then
+        echo "  [queue] ${nq}/${MAX_QUEUED_CONVERTS} conv_* queued (+${reserve} in flight);" \
+             "waiting for room before ${GATE_DT:-the next timestep} ($(date -u +%H:%M)Z)."
         return 1
     fi
-    Q_SINCE=1
+    Q_SINCE=$((reserve + 1))
     return 0
 }
 
-# Block until there is room. 1 = a stop was requested while waiting.
+# Block until there is room.
+#   0 = go ahead
+#   1 = a stop was requested while waiting
+#   2 = the driver's time budget is spent; the caller should respawn, not keep waiting
+#
+# The budget check is not optional. The gate this replaced slept and re-entered the
+# main loop, where the DRIVER_MAX_SECONDS check fires; looping here instead parked a
+# login-node process for as long as the queue stayed full -- hours, if DCGP is busy --
+# and a parked chain writes no ledger entry at all, so `report=true` shows nothing and
+# the only evidence is the driver log. Found in review of 0f674cf.
 gate_wait() {
+    GATE_DT="${1:-}"
     while ! gate_admit; do
         if stop_requested; then
             echo "STOP flag present (${STOP_FLAG}); stopping while waiting on the queue."
             return 1
+        fi
+        if [ "$(( $(date +%s) - DRIVER_START ))" -ge "$DRIVER_MAX_SECONDS" ]; then
+            echo "Time budget (${DRIVER_MAX_SECONDS}s) reached while waiting on the queue;" \
+                 "will respawn for the rest of the window."
+            return 2
         fi
         sleep 60
     done
@@ -551,10 +580,14 @@ while [ "$processed" -lt "$BATCH_SIZE" ] && within_window "$CUR_EPOCH"; do
     elif [ "${DOWNLOAD_ONLY}" != "1" ] && [ "$h" != "00" ] && ! ensure_ref "$d" "$h"; then
         echo "  WARN [${dt}] 00Z reference unavailable, skipping (REF_UNAVAILABLE)."
     elif [ "${DRY_RUN}" = "1" ] || [ "${FETCH_PARALLEL}" -le 1 ]; then
-        gate_wait || break
+        grc=0; gate_wait "$dt" || grc=$?
+        [ "$grc" -eq 2 ] && { budget_hit=1; break; }
+        [ "$grc" -ne 0 ] && break
         process_one "$d" "$h" || true
     else
-        gate_wait || break
+        grc=0; gate_wait "$dt" || grc=$?
+        [ "$grc" -eq 2 ] && { budget_hit=1; break; }
+        [ "$grc" -ne 0 ] && break
         process_one "$d" "$h" &
         running=$((running + 1))
         if [ "$running" -ge "$FETCH_PARALLEL" ]; then
