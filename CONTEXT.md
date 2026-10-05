@@ -65,6 +65,12 @@ The forecast step range encoded in a message, as opposed to the timestep it is v
 Accumulated variables carry a range; instantaneous ones do not.
 _Avoid_: step
 
+**Dataset variable**:
+One column of the Anemoi dataset: one GRIB message's variable on one level (`t_850`, `2t`),
+or a forcing anemoi computes at build time (`cos_latitude`). A pressure-level variable is
+thirteen dataset variables; the archive's 246 messages plus the forcings make 255.
+_Avoid_: variable, when the Anemoi column is meant
+
 **Sidecar**:
 A small file beside the archive holding something the converter needs but cannot read from
 the timestep it is converting.

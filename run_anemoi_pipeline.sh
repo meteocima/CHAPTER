@@ -10,7 +10,7 @@ echo ""
 
 # Configurazione
 RECIPE_FILE="${1:-wrf_anemoi_recipe.yaml}"
-OUTPUT_DATASET="${2:-zarr_anemoi/ailam-an-cima-3km-2023-2023-1h-v1.zarr}"
+OUTPUT_DATASET="${2:-zarr_anemoi/ailam-an-cima-3km-2024-2024-1h-v1.zarr}"
 
 echo "Configurazione:"
 echo "  Recipe file: $RECIPE_FILE"
@@ -36,7 +36,9 @@ echo "Usando anemoi-datasets create per costruire il dataset..."
 echo "Nota: Le statistiche vengono calcolate automaticamente durante la creazione"
 echo ""
 
-uv run anemoi-datasets create "$RECIPE_FILE" "$OUTPUT_DATASET"
+# The anemoi/ environment, not the conversion one: anemoi-datasets 0.5.32 there crashes in
+# finalise on our data (see anemoi/pyproject.toml).
+uv run --project anemoi anemoi-datasets create "$RECIPE_FILE" "$OUTPUT_DATASET"
 
 if [ $? -eq 0 ]; then
     echo ""
@@ -53,7 +55,7 @@ echo "STEP 2: Ispezione Dataset"
 echo "------------------------------------------------------------------------"
 echo ""
 
-uv run anemoi-datasets inspect "$OUTPUT_DATASET"
+uv run --project anemoi anemoi-datasets inspect "$OUTPUT_DATASET"
 
 if [ $? -eq 0 ]; then
     echo ""
@@ -95,6 +97,6 @@ echo "Dataset generato: $OUTPUT_DATASET"
 echo ""
 echo "Prossimi passi:"
 echo "  1. Il dataset è pronto per l'uso con anemoi-training"
-echo "  2. Usa 'uv run anemoi-datasets inspect $OUTPUT_DATASET' per dettagli"
-echo "  3. Consulta ANEMOI_README.md per la documentazione"
+echo "  2. Usa 'uv run --project anemoi anemoi-datasets inspect $OUTPUT_DATASET' per dettagli"
+echo "  3. Recipe e test: wrf_anemoi_recipe.yaml, tools/run_anemoi_test.sh"
 echo ""

@@ -1,0 +1,23 @@
+# The environment that builds Anemoi datasets from the GRIB2 archive, kept apart from the
+# conversion's on purpose. anemoi-datasets 0.5.32 -- what the conversion venv resolved to --
+# crashes in `finalise` whenever one variable is NaN everywhere on one date (`fal` at
+# night): Aggregator.aggregate indexes the per-date count array with a variable index.
+# 0.5.4x rewrote the statistics and the bug is gone, but the upgrade moves
+# anemoi-transform/anemoi-utils a major version and pandas back to 2.x, and the conversion
+# venv is read live by every convert job and fetch driver. Two environments make the
+# dataset build upgradable without touching a running campaign.
+#
+#   uv run --project anemoi anemoi-datasets create wrf_anemoi_recipe.yaml <out.zarr>
+[project]
+name = "chapter-anemoi"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "anemoi-datasets==0.5.45",
+    "eccodes",
+    "pyyaml",
+    "pytest",
+]
+
+[tool.uv]
+package = false

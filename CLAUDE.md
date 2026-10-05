@@ -56,20 +56,32 @@ supermuc-put <local_path> <remote_path>    # rsync upload via SSH socket
 supermuc-get <remote_path> <local_path>    # rsync download via SSH socket
 ```
 
-**WRF to Anemoi ZARR:**
+**GRIB archive to Anemoi ZARR** (in its own environment, `anemoi/`, not the conversion venv):
 ```bash
-./run_anemoi_pipeline.sh [recipe.yaml] [output.zarr]
+./run_anemoi_pipeline.sh [recipe.yaml] [output.zarr]     # = uv run --project anemoi anemoi-datasets create ...
+tools/run_anemoi_test.sh                                 # end-to-end test on three timesteps, as a SLURM job
 ```
 
 ## Testing
 
-There is **one** automated test file, `tests/test_ledger.py`, covering the ledger token
-classification in `hpc/ledger.py` -- pure string logic, the one part of this codebase a test
-can settle. Run it with `uv run pytest` (pytest is in the `dev` dependency group). Everything
-else, including the whole conversion, is verified by hand; the upstream wrf-python test
-commands do not apply. No CI/CD pipeline, no linter configuration.
+The automated tests in `tests/` cover the parts of this codebase a test can settle: the
+ledger token classification (`test_ledger.py`), the convert queue gate (`test_convert_gate.py`),
+the report's pending count (`test_report_counts.py`) and the `static_ref.py` CLI parser
+(`test_static_ref_cli.py`) -- string and shell logic, run with `uv run pytest` in seconds
+(pytest is in the `dev` dependency group). The conversion itself is verified by hand; the
+upstream wrf-python test commands do not apply. No CI/CD pipeline, no linter configuration.
 
-One of those tests reads `hpc/fetch_step.sh` and asserts that every ledger token it writes
+The one exception is `test_anemoi_dataset.py`, the archive -> Anemoi step end to end: it
+builds `wrf_anemoi_recipe.yaml` over three real timesteps (2024-07-01T23..07-02T01) and
+checks the dataset against the GRIB files read with eccodes -- dates, the 246 variables plus
+the recipe's forcings, every value bit-identical, the grid, accumulations zero at 00Z, the
+masks. It is **opt-in, against the rule below on purpose**: the build reads ~2.2 GB and
+writes a multi-GB zarr, which the login node's 600 s CPU limit cannot hold, so under plain
+`uv run pytest` it skips. Run it with `tools/run_anemoi_test.sh [pytest args]`, which
+submits it to `dcgp_usr_prod` in the `anemoi/` environment (~5 min with a build, ~2 min
+reusing the dataset kept in `/leonardo_work/AIFPT_AILAMIT/CHAPTER/anemoi_test`).
+
+`test_ledger.py` reads `hpc/fetch_step.sh` and asserts that every ledger token it writes
 appears in `hpc/ledger.TOKEN_KINDS`. **Adding a `log_status` token to the driver without
 teaching the reporter fails it** -- that is the point, since a token the reporter does not
 know used to be dropped from `report=true` in silence.
@@ -124,7 +136,8 @@ Changes to anything else are verified by hand, in this order:
 - **`MISSING_VARIABLES.md`** (+ `.pdf`) - What was requested but cannot be produced from these wrfout, and by which other route some of it could still be obtained. Read it before promising a variable
 - **`CHAPTER_KNOWN_PROPERTIES.md`** (+ `.pdf`) - The user-facing statement of what the archive gets *right and surprisingly*: the output of the September 2026 variable audit, one entry per property with its measured number and a link to the issue that measured it (aerosol-free shortwave, the cloud deficit, the cold land skin, `r` vs `2r`, the below-ground clamp, `10fg`, the masking rule, `mucin`'s bitmap, the conventions that discriminate nothing). **A finding that is documentation rather than repair belongs here**, not only in `docs/audit/` — that tree records how a number was measured and is addressed to whoever re-runs the harness; this one is addressed to whoever uses the data and never reads this repository
 - **`tools/md2pdf.py`** - Minimal Markdown -> LaTeX -> PDF (no pandoc on Leonardo; xelatex + DejaVu handles Unicode). `tools/eccodes_env.sh` - source it before any interactive script that imports the eccodes bindings
-- **`wrf_anemoi_recipe.yaml`** - Anemoi dataset recipe (input patterns, date ranges, compression settings)
+- **`wrf_anemoi_recipe.yaml`** - Anemoi dataset recipe over the `grib_v3` archive: one GRIB per timestep selected on `valid_datetime` (so the 00Z-referred accumulations and `10fg` land on their timestep), a `flavour` that drops the level from single-level names (`msl`, not `msl_0`), the forcings joined at build time (255 dataset variables), `allow_nans` for the 16 bitmap-masked variables, and `chunking: variables: 64` because one whole date is 2.26 GB, past the 2 GiB a Zstd chunk can hold. **`fal` is missing on every point at night** (the converter's own rule, below 50 W/m^2), which a training config has to impute or drop
+- **`anemoi/`** - The separate uv environment that builds Anemoi datasets (`uv run --project anemoi ...`, anemoi-datasets 0.5.45). Separate because 0.5.32, what the conversion venv resolves to, crashes in `finalise` whenever one variable is NaN everywhere on one date (it indexes the per-date counts with a variable index), and upgrading it moves anemoi-transform/anemoi-utils a major version inside the venv that every convert job reads live
 - **`conf/pipeline.yaml`** - Hydra configuration for the HPC pipeline (date range, paths, SuperMUC remote config, SLURM settings, GRIB naming template)
 - **`hpc/`** - HPC pipeline for Leonardo (CINECA). Uses Hydra config (`conf/pipeline.yaml`) with CLI overrides.
   - `submit_pipeline.py` - Orchestrator with two modes: entry (submits itself to SLURM) and worker (`--worker`, runs the job submission loop)

@@ -1,38 +1,59 @@
-# Anemoi Dataset Recipe for WRF Model Output
-# Converts WRF pressure-level data to Anemoi-ready format
+# Anemoi dataset recipe for the CHAPTER GRIB2 archive (grib_v3, 246 messages/timestep).
+# Built with `anemoi-datasets create`; tests/test_anemoi_dataset.py builds this same
+# recipe over three timesteps (it narrows `dates` and widens `statistics` to match, and
+# reads its forcings, allow_nans and path from here) and checks the result against
+# the GRIB files read with eccodes.
 
-# Dataset metadata
-name: ailam-an-cima-3km-2023-2023-1h-v1
-description: "WRF CHAPTER domain d02 interpolated to pressure levels"
+name: ailam-an-cima-3km-2024-2024-1h-v1
+description: "CHAPTER 3 km WRF reanalysis, domain d02, GRIB2 archive grib_v3"
 attribution: "CHAPTER Project - CIMA Foundation"
 licence: "Internal use"
-resolution: "3km"
 
-# Temporal configuration
 dates:
-  start: '2023-03-28T12:00:00'
-  end: '2023-03-28T15:00:00'
-  frequency: 1h  # Frequenza tra timesteps
-  missing:
-    - 2023-03-28T13:00:00
-    - 2023-03-28T14:00:00
+  start: '2024-07-01T00:00:00'
+  end: '2024-07-31T23:00:00'
+  frequency: 1h
 
-# Input data source
+# One GRIB per timestep. The grib source selects on valid_datetime, so the accumulated
+# variables (reference 00Z, GRIB step 0-H) and 10fg (reference H-1) land on their timestep.
+# The forcings are not in the archive: anemoi computes them at build time on the grid of
+# the GRIB it is joined to.
+# The flavour is anemoi's documented fix for single-level names: every non-pressure level
+# type (meanSea, entireAtmosphere, nominalTop, entireLake, mostUnstableParcel) carries
+# levelist 0 in the MARS keys, which would name the variables msl_0, tcc_0, mucin_0.
 input:
-  grib:
-    path: /home/lmonaco/CHAPTER/output/ailam-an-cima-3km-2023-2023-1h-v1-*.grib
+  join:
+    - grib:
+        flavour:
+          - - levtype: sfc
+            - levelist: null
+        path: '/leonardo_work/AIFPT_AILAMIT/CHAPTER/grib_v3/{date:strftime(%Y)}/{date:strftime(%m)}/ailam-an-cima-3km-{date:strftime(%Y)}-{date:strftime(%Y)}-1h-v1-{date:strftime(%Y%m%d%H)}.grib'
+    - forcings:
+        template: ${input.join.0.grib}
+        param:
+          - cos_latitude
+          - sin_latitude
+          - cos_longitude
+          - sin_longitude
+          - cos_julian_day
+          - sin_julian_day
+          - cos_local_time
+          - sin_local_time
+          - insolation
 
-# Output configuration
+# The variables the archive masks with a GRIB bitmap, i.e. where the ERA5 parameter is not
+# defined (CHAPTER_KNOWN_PROPERTIES.md): anemoi rejects NaNs unless they are listed here.
+statistics:
+  allow_nans: [sst, ci, tsn, fal, tvl, slt, dl, swvl1, swvl2, swvl3, swvl4,
+               stl1, stl2, stl3, stl4, mucin]
+
+# One date is 255 variables x 2 220 273 points x 4 B = 2.26 GB, past the 2 GiB a Zstd
+# buffer can hold ("Codec does not support buffers of > 2147483647 bytes"), so a date is
+# split across variables: 64 per chunk is ~570 MB raw, four chunks per date.
 output:
-  # Chunking configuration (time only)
   chunking:
     dates: 1
-  
-  # Compression
+    variables: 64
   compressor:
     _class: numcodecs.Zstd
     level: 3
-
-# Statistics computation
-statistics:
-  method: "default"  # Anemoi computes statistics automatically
