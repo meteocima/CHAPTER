@@ -57,7 +57,28 @@ SEQ_LOG="${LOG_DIR}/rebuild_sequence.log"
 SEQ_STOP="${LOG_DIR}/rebuild_sequence.stop"
 UV="${UV:-${HOME}/.local/bin/uv}"
 MAX_QUEUED=48          # convert chain: batch.size and batch.max_queued_converts
-FETCH_PARALLEL=3       # download chain: concurrent sftp streams through the datamover
+# Concurrent sftp streams through the datamover. The knee is at 6 and the relay's
+# aggregate ceiling is ~370 MB/s, both measured on 2026-10-06 (#69): 3 streams give
+# 187 MB/s (62.4 each), 4 give 244 (61.1), 6 give 359 (59.8), 8 give only 374 -- and at
+# 8 every stream measures 46.8 to the decimal, which is an aggregate cap being shared
+# equally rather than independent channels. Up to 6 the bottleneck is the single sftp
+# channel, so each stream added brings new bandwidth; past it there is nothing left to
+# win, only load on a datamover other projects share. Dropping back to 6 restored
+# 57.2 per stream, which is how we know the ceiling was ours and not someone else's
+# traffic. 6 takes 95% of it.
+FETCH_PARALLEL="${FETCH_PARALLEL:-6}"
+case "$FETCH_PARALLEL" in
+    *[!0-9]*) echo "FETCH_PARALLEL must be a whole number, got '${FETCH_PARALLEL}'" >&2; exit 2 ;;
+esac
+# 8 is both the highest value ever measured and already past the knee, so refusing more
+# costs nothing real. Re-measure before raising this bound, and move #69 with it.
+if [ "$FETCH_PARALLEL" -lt 1 ] || [ "$FETCH_PARALLEL" -gt 8 ]; then
+    echo "FETCH_PARALLEL must be 1..8: 6 is the measured knee and 8 the highest value measured (#69); got ${FETCH_PARALLEL}" >&2
+    exit 2
+fi
+if [ "$FETCH_PARALLEL" -gt 6 ]; then
+    echo "WARNING: FETCH_PARALLEL=${FETCH_PARALLEL} is past the measured knee of 6; it adds load on the shared datamover for no measured gain (#69)" >&2
+fi
 DEAD_MINUTES=60        # a driver log silent this long without completing is dead
 POLL_SECONDS=300
 PROJECT_QUOTA_ID=20148120        # lfs project id of /leonardo_work/AIFPT_AILAMIT
@@ -70,7 +91,7 @@ SANITY_ACCOUNT=aifpt_ailamit_0
 KEEP_WRFOUT="${KEEP_WRFOUT:-false}"
 # Restrict the run to these phase labels (space separated). Empty = all.
 PHASES_ONLY="${PHASES_ONLY:-}"
-export KEEP_WRFOUT PHASES_ONLY
+export KEEP_WRFOUT PHASES_ONLY FETCH_PARALLEL
 
 # label  start_date start_hour  end_date end_hour
 # The first phase is a 72 h shakedown: an end-to-end failure shows up in ~2 h instead of

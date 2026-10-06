@@ -100,7 +100,9 @@ datamover:
 # Batch / parallelism for the step-by-step pipeline
 batch:
   size: 24           # upper bound on timesteps per driver process (time budget usually cuts first)
-  fetch_parallel: 2  # concurrent scp through the datamover (keep low: shared login node + datamover)
+  fetch_parallel: 6  # concurrent sftp streams through the datamover; 6 is the measured
+                     # knee, the relay's aggregate ceiling is ~370 MB/s (#69). The transfer
+                     # runs ON the datamover, so the login node pays no crypto for it.
   # Queue gate (0 = off). >0: the cap on this user's queued conv_* jobs. The driver
   # submits as soon as there is room, so the queue stays full instead of being drained
   # between batches (#65). batch.size is NOT capped to it: the gate bounds how many

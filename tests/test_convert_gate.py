@@ -195,7 +195,9 @@ def test_the_cap_holds_even_when_submission_lags_behind_admission(gate_src):
 
 
 def test_the_cap_holds_at_campaign_settings(gate_src):
-    admitted, _ = run(gate_src, cap=48, attempts=200, drain=0, parallel=3, lag=3)
+    # parallel=6 since 2026-10-06 (#69): the campaign's download chains run at the
+    # measured knee, and the gate's reserve is derived from exactly this number.
+    admitted, _ = run(gate_src, cap=48, attempts=200, drain=0, parallel=6, lag=6)
     assert admitted <= 48, f"committed {admitted} against a cap of 48"
 
 

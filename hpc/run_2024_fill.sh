@@ -38,7 +38,8 @@ SEQ_LOG="${LOG_DIR}/fill2024_sequence.log"
 SEQ_STOP="${LOG_DIR}/fill2024_sequence.stop"
 UV="${UV:-${HOME}/.local/bin/uv}"
 MAX_QUEUED=48          # convert chain: batch.size and batch.max_queued_converts
-FETCH_PARALLEL=3       # download chain: concurrent sftp streams through the datamover
+# Concurrent sftp streams through the datamover; 6 is the measured knee (#69).
+FETCH_PARALLEL="${FETCH_PARALLEL:-6}"
 DEAD_MINUTES=60        # a driver log silent this long without completing is dead
 POLL_SECONDS=300
 PROJECT_QUOTA_ID=20148120        # lfs project id of /leonardo_work/AIFPT_AILAMIT
